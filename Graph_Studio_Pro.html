@@ -101,9 +101,9 @@
         }
         
         @keyframes pointPop {
-            0% { r: 0; opacity: 0; }
-            50% { r: 8; opacity: 1; }
-            100% { r: 5; opacity: 1; }
+            0% { transform: scale(0); opacity: 0; }
+            60% { transform: scale(1.35); opacity: 1; }
+            100% { transform: scale(1); opacity: 1; }
         }
         
         @keyframes glow {
@@ -340,6 +340,64 @@
         
         .fullscreen-modal {
             z-index: 9999;
+        }
+
+        /* Card Resize Handle */
+        .resize-handle {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 10px;
+            cursor: ns-resize;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            z-index: 10;
+        }
+
+        .graph-card:hover .resize-handle {
+            opacity: 1;
+        }
+
+        .resize-handle-bar {
+            width: 40px;
+            height: 4px;
+            border-radius: 2px;
+            background: rgba(255, 255, 255, 0.4);
+            pointer-events: none;
+        }
+
+        .graph-card.is-resizing {
+            transition: none !important;
+            user-select: none;
+        }
+
+        .graph-card.is-resizing .resize-handle {
+            opacity: 1;
+        }
+
+        /* Marker shape picker */
+        .marker-shape-btn {
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            border: 2px solid transparent;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .marker-shape-btn.active {
+            border-color: #3b82f6;
+            background: rgba(59, 130, 246, 0.2);
+        }
+        .marker-shape-btn:hover:not(.active) {
+            border-color: rgba(255,255,255,0.3);
+            background: rgba(255,255,255,0.05);
         }
         
         .dashboard-stat {
@@ -725,7 +783,20 @@
         };
 
 
-        const D3Graph = ({ config, data, id, isFullscreen = false, theme }) => {
+        // Map shape name to D3 symbol type
+        const getD3Symbol = (shape) => {
+            switch(shape) {
+                case 'square':   return d3.symbolSquare;
+                case 'triangle': return d3.symbolTriangle;
+                case 'diamond':  return d3.symbolDiamond;
+                case 'cross':    return d3.symbolCross;
+                case 'star':     return d3.symbolStar;
+                case 'wye':      return d3.symbolWye;
+                default:         return d3.symbolCircle;
+            }
+        };
+
+        const D3Graph = ({ config, data, id, isFullscreen = false, theme, cardHeight }) => {
             const svgRef = useRef(null);
             const containerRef = useRef(null);
             const isDashboard = config.graphStyle === 'dashboard';
@@ -740,7 +811,7 @@
 
                 const container = containerRef.current;
                 const containerWidth = container.clientWidth;
-                const containerHeight = isFullscreen ? window.innerHeight * 0.7 : 400;
+                const containerHeight = isFullscreen ? window.innerHeight * 0.7 : (cardHeight || 400);
                 
                 // Filter to only visible series
                 const visibleData = data.filter(series => series.visible !== false);
@@ -982,14 +1053,16 @@
                         .filter(d => d.x != null && d.y != null && !isNaN(d.x) && !isNaN(d.y))
                         .sort((a, b) => a.x - b.x);
                     
-                    // Add area fill for dashboard (drawn first, behind everything)
-                    if (isDashboard) {
+                    const isScatter = series.plotType === 'scatter';
+
+                    // Add area fill for dashboard (drawn first, behind everything) - not for scatter
+                    if (isDashboard && !isScatter) {
                         const area = d3.area()
                             .x(d => xScale(d.x))
                             .y0(height)
                             .y1(d => yScale(d.y))
                             .curve(d3.curveLinear);
-                        
+
                         g.append('path')
                             .datum(validData)
                             .attr('class', 'data-area')
@@ -997,43 +1070,61 @@
                             .attr('fill', color)
                             .attr('opacity', 0.1);
                     }
-                    
-                    // Draw line (on top of area)
-                    const line = d3.line()
-                        .x(d => xScale(d.x))
-                        .y(d => yScale(d.y))
-                        .defined(d => d.x != null && d.y != null && !isNaN(d.x) && !isNaN(d.y))
-                        .curve(d3.curveLinear);
 
-                    const path = g.append('path')
-                        .datum(validData)
-                        .attr('class', 'data-line')
-                        .attr('d', line)
-                        .attr('fill', 'none')
-                        .attr('stroke', color)
-                        .attr('stroke-width', isDashboard ? 3 : 2.5)
-                        .attr('stroke-linejoin', 'round')
-                        .attr('stroke-linecap', 'round');
+                    // Draw line (on top of area) - not for scatter mode
+                    if (!isScatter) {
+                        const line = d3.line()
+                            .x(d => xScale(d.x))
+                            .y(d => yScale(d.y))
+                            .defined(d => d.x != null && d.y != null && !isNaN(d.x) && !isNaN(d.y))
+                            .curve(d3.curveLinear);
 
-                    // Add animation for dashboard mode with dynamic dasharray
-                    if (isDashboard) {
-                        const pathLength = path.node().getTotalLength();
-                        path.attr('stroke-dasharray', pathLength)
-                            .attr('stroke-dashoffset', pathLength)
-                            .classed('animated', true);
+                        const path = g.append('path')
+                            .datum(validData)
+                            .attr('class', 'data-line')
+                            .attr('d', line)
+                            .attr('fill', 'none')
+                            .attr('stroke', color)
+                            .attr('stroke-width', isDashboard ? 3 : 2.5)
+                            .attr('stroke-linejoin', 'round')
+                            .attr('stroke-linecap', 'round');
+
+                        // Add animation for dashboard mode with dynamic dasharray
+                        if (isDashboard) {
+                            const pathLength = path.node().getTotalLength();
+                            path.attr('stroke-dasharray', pathLength)
+                                .attr('stroke-dashoffset', pathLength)
+                                .classed('animated', true);
+                        }
                     }
 
-                    // Draw points (on top of line)
-                    g.selectAll(`.data-point-${idx}`)
-                        .data(validData)
-                        .enter()
-                        .append('circle')
-                        .attr('class', `data-point data-point-${idx}`)
-                        .attr('cx', d => xScale(d.x))
-                        .attr('cy', d => yScale(d.y))
-                        .attr('r', isDashboard ? (isFullscreen ? 7 : 6) : (isFullscreen ? 6 : 5))
-                        .attr('fill', color)
-                        .style('animation-delay', (d, i) => `${i * 0.05}s`);
+                    // Draw markers/points (on top of line) - respects showMarkers config
+                    if (config.showMarkers !== false) {
+                        const markerRadius = isDashboard ? (isFullscreen ? 7 : 6) : (isFullscreen ? 6 : 5);
+                        // D3 symbol size is area in square pixels; circle area = π r²
+                        const symbolSize = Math.PI * markerRadius * markerRadius;
+                        const markerShape = series.markerShape || 'circle';
+
+                        const symbolGenerator = d3.symbol()
+                            .type(getD3Symbol(markerShape))
+                            .size(symbolSize);
+
+                        // Wrap in <g> so CSS transform animation (scale) doesn't fight SVG transform (translate)
+                        const pointGroups = g.selectAll(`.data-point-group-${idx}`)
+                            .data(validData)
+                            .enter()
+                            .append('g')
+                            .attr('class', `data-point-group-${idx}`)
+                            .attr('transform', d => `translate(${xScale(d.x)}, ${yScale(d.y)})`);
+
+                        pointGroups.append('path')
+                            .attr('class', `data-point data-point-${idx}`)
+                            .attr('d', symbolGenerator)
+                            .attr('fill', color)
+                            .attr('stroke', isDashboard ? 'rgba(255,255,255,0.7)' : 'white')
+                            .attr('stroke-width', isDashboard ? 2.5 : 2)
+                            .style('animation-delay', (d, i) => `${i * 0.05}s`);
+                    }
                 });
 
                 // Draw trendlines with positioned equation boxes
@@ -1055,59 +1146,63 @@
                                 { x: xMax, y: regression.slope * xMax + regression.intercept }
                             ];
 
-                            // Draw trendline
+                            // Draw trendline (dashed or solid based on config)
                             const trendLine = d3.line()
                                 .x(d => xScale(d.x))
                                 .y(d => yScale(d.y));
 
+                            const isTrendlineDashed = config.trendlineDashed !== false; // default: dashed
                             g.append('path')
                                 .datum(trendData)
                                 .attr('d', trendLine)
                                 .attr('stroke', color)
                                 .attr('stroke-width', 2)
-                                .attr('stroke-dasharray', '5,5')
+                                .attr('stroke-dasharray', isTrendlineDashed ? '6,4' : 'none')
                                 .attr('fill', 'none')
-                                .attr('opacity', 0.8);
+                                .attr('opacity', 0.85);
 
-                            // Format equation and R²
-                            const slope = regression.slope.toExponential(2);
-                            const intercept = regression.intercept.toExponential(2);
-                            const rSquared = regression.rSquared.toFixed(4);
-                            const sign = regression.intercept >= 0 ? '+' : '';
-                            const equation = `y = ${slope}x ${sign} ${intercept}`;
-                            const rSquaredText = `R² = ${rSquared}`;
+                            // Only render annotation box when showR2 is enabled
+                            if (config.showR2 !== false) {
+                                // Format equation and R²
+                                const slope = regression.slope.toExponential(2);
+                                const intercept = regression.intercept.toExponential(2);
+                                const rSquared = regression.rSquared.toFixed(4);
+                                const sign = regression.intercept >= 0 ? '+' : '';
+                                const equation = `y = ${slope}x ${sign} ${intercept}`;
+                                const rSquaredText = `R² = ${rSquared}`;
 
-                            // Position at 40% along the trendline, offset perpendicular to avoid overlap
-                            const labelX = xMin + (xMax - xMin) * 0.4;
-                            const labelY = regression.slope * labelX + regression.intercept;
-                            
-                            // Offset perpendicular to the line based on series index to avoid overlap
-                            const lineAngle = Math.atan2(
-                                yScale(trendData[0].y) - yScale(trendData[1].y),
-                                xScale(trendData[1].x) - xScale(trendData[0].x)
-                            );
-                            const perpAngle = lineAngle + Math.PI / 2;
-                            const offsetDistance = 30 + (idx * 25); // Stagger offsets for multiple series
-                            
-                            // Determine if we should offset up or down based on line slope
-                            const offsetDirection = regression.slope > 0 ? -1 : 1;
-                            const offsetX = Math.cos(perpAngle) * offsetDistance * offsetDirection;
-                            const offsetY = Math.sin(perpAngle) * offsetDistance * offsetDirection;
-                            
-                            // Check if there's a saved position for this series
-                            const savedPosition = series.equationPosition || null;
-                            
-                            trendlineAnnotations.push({
-                                equation,
-                                rSquaredText,
-                                color,
-                                x: labelX,
-                                y: labelY,
-                                offsetX,
-                                offsetY,
-                                seriesIdx: idx,
-                                savedPosition
-                            });
+                                // Position at 40% along the trendline, offset perpendicular to avoid overlap
+                                const labelX = xMin + (xMax - xMin) * 0.4;
+                                const labelY = regression.slope * labelX + regression.intercept;
+
+                                // Offset perpendicular to the line based on series index to avoid overlap
+                                const lineAngle = Math.atan2(
+                                    yScale(trendData[0].y) - yScale(trendData[1].y),
+                                    xScale(trendData[1].x) - xScale(trendData[0].x)
+                                );
+                                const perpAngle = lineAngle + Math.PI / 2;
+                                const offsetDistance = 30 + (idx * 25); // Stagger offsets for multiple series
+
+                                // Determine if we should offset up or down based on line slope
+                                const offsetDirection = regression.slope > 0 ? -1 : 1;
+                                const offsetX = Math.cos(perpAngle) * offsetDistance * offsetDirection;
+                                const offsetY = Math.sin(perpAngle) * offsetDistance * offsetDirection;
+
+                                // Check if there's a saved position for this series
+                                const savedPosition = series.equationPosition || null;
+
+                                trendlineAnnotations.push({
+                                    equation,
+                                    rSquaredText,
+                                    color,
+                                    x: labelX,
+                                    y: labelY,
+                                    offsetX,
+                                    offsetY,
+                                    seriesIdx: idx,
+                                    savedPosition
+                                });
+                            }
                         }
                     }
                 });
@@ -1332,22 +1427,43 @@
                             .attr('transform', `translate(5, ${entryIdx * rowHeight + 10})`);
 
                         if (entry.type === 'series') {
-                            // Solid line for series
-                            legendRow.append('line')
-                                .attr('x1', 0)
-                                .attr('x2', 30)
-                                .attr('y1', 0)
-                                .attr('y2', 0)
-                                .attr('stroke', color)
-                                .attr('stroke-width', isDashboard ? 3 : 2.5);
+                            const isSeriesScatter = entry.series.plotType === 'scatter';
+                            const showSeriesMarkers = config.showMarkers !== false;
 
-                            legendRow.append('circle')
-                                .attr('cx', 15)
-                                .attr('cy', 0)
-                                .attr('r', 4)
-                                .attr('fill', color)
-                                .attr('stroke', isDashboard ? (theme?.graph?.bg || '#1e293b') : 'white')
-                                .attr('stroke-width', 2);
+                            // Draw connecting line (only for line/non-scatter mode)
+                            if (!isSeriesScatter) {
+                                legendRow.append('line')
+                                    .attr('x1', 0)
+                                    .attr('x2', 30)
+                                    .attr('y1', 0)
+                                    .attr('y2', 0)
+                                    .attr('stroke', color)
+                                    .attr('stroke-width', isDashboard ? 3 : 2.5);
+                            }
+
+                            // Draw marker symbol matching the series marker shape
+                            if (showSeriesMarkers) {
+                                const legendSymbolSize = Math.PI * 4 * 4; // radius 4 equivalent
+                                const legendSymbol = d3.symbol()
+                                    .type(getD3Symbol(entry.series.markerShape || 'circle'))
+                                    .size(legendSymbolSize);
+
+                                legendRow.append('path')
+                                    .attr('d', legendSymbol)
+                                    .attr('transform', `translate(15, 0)`)
+                                    .attr('fill', color)
+                                    .attr('stroke', isDashboard ? (theme?.graph?.bg || '#1e293b') : 'white')
+                                    .attr('stroke-width', 1.5);
+                            } else if (isSeriesScatter) {
+                                // Scatter with no markers: show a small square as indicator
+                                legendRow.append('rect')
+                                    .attr('x', 8).attr('y', -5)
+                                    .attr('width', 14).attr('height', 10)
+                                    .attr('fill', 'none')
+                                    .attr('stroke', color)
+                                    .attr('stroke-width', 1.5)
+                                    .attr('rx', 2);
+                            }
 
                             legendRow.append('text')
                                 .attr('x', 35)
@@ -1358,7 +1474,8 @@
                                 .style('fill', isDashboard ? (theme?.graph?.textColor || '#e2e8f0') : '#000000')
                                 .text(entry.series.name);
                         } else {
-                            // Dashed line for trendline
+                            // Dashed/solid line for trendline (matches config.trendlineDashed)
+                            const isTrendDashed = config.trendlineDashed !== false;
                             legendRow.append('line')
                                 .attr('x1', 0)
                                 .attr('x2', 30)
@@ -1366,7 +1483,7 @@
                                 .attr('y2', 0)
                                 .attr('stroke', color)
                                 .attr('stroke-width', 2)
-                                .attr('stroke-dasharray', '5,5')
+                                .attr('stroke-dasharray', isTrendDashed ? '5,5' : 'none')
                                 .attr('opacity', 0.8);
 
                             legendRow.append('text')
@@ -1454,7 +1571,7 @@
                     });
                 }
 
-            }, [config, data, id, isFullscreen, isDashboard, theme, readingMode]);
+            }, [config, data, id, isFullscreen, isDashboard, theme, readingMode, cardHeight]);
 
             return (
                 <div ref={containerRef} style={{ width: '100%', position: 'relative' }}>
@@ -1629,6 +1746,48 @@
             const [globalViewMode, setGlobalViewMode] = useState('individual'); // 'individual', 'research', or 'dashboard'
             const [currentTheme, setCurrentTheme] = useState('midnight');
             const [renderKey, setRenderKey] = useState(0);
+
+            // Card resize state (using ref to avoid re-render on each mousemove)
+            const resizeState = useRef({ isResizing: false, startY: 0, startHeight: 0, graphId: null });
+
+            useEffect(() => {
+                const handleMouseMove = (e) => {
+                    if (!resizeState.current.isResizing) return;
+                    const deltaY = e.clientY - resizeState.current.startY;
+                    const newHeight = Math.max(220, Math.min(900, resizeState.current.startHeight + deltaY));
+                    setGraphs(prev => prev.map(g =>
+                        g.id === resizeState.current.graphId
+                            ? { ...g, cardHeight: newHeight }
+                            : g
+                    ));
+                };
+                const handleMouseUp = () => {
+                    if (resizeState.current.isResizing) {
+                        resizeState.current.isResizing = false;
+                        document.body.style.cursor = '';
+                        document.body.style.userSelect = '';
+                    }
+                };
+                document.addEventListener('mousemove', handleMouseMove);
+                document.addEventListener('mouseup', handleMouseUp);
+                return () => {
+                    document.removeEventListener('mousemove', handleMouseMove);
+                    document.removeEventListener('mouseup', handleMouseUp);
+                };
+            }, []);
+
+            const handleResizeMouseDown = (e, graph) => {
+                e.preventDefault();
+                e.stopPropagation();
+                resizeState.current = {
+                    isResizing: true,
+                    startY: e.clientY,
+                    startHeight: graph.cardHeight || 400,
+                    graphId: graph.id
+                };
+                document.body.style.cursor = 'ns-resize';
+                document.body.style.userSelect = 'none';
+            };
             
             const theme = THEMES[currentTheme];
             const [modalForm, setModalForm] = useState({
@@ -1640,7 +1799,10 @@
                 graphStyle: 'research',
                 showGrid: false,
                 showTrendline: false,
-                series: [{ id: Date.now(), name: 'Series 1', sheet: '', xColumn: '', yColumn: '', xErrorColumn: '', yErrorColumn: '', customColor: '', visible: true, showTrendline: true, trendlineName: 'Trendline 1', showTrendlineInLegend: true, excludedPoints: [] }]
+                showR2: true,
+                trendlineDashed: true,
+                showMarkers: true,
+                series: [{ id: Date.now(), name: 'Series 1', sheet: '', xColumn: '', yColumn: '', xErrorColumn: '', yErrorColumn: '', customColor: '', visible: true, showTrendline: true, trendlineName: 'Trendline 1', showTrendlineInLegend: true, excludedPoints: [], markerShape: 'circle', plotType: 'line' }]
             });
 
             // Auto-update graph palettes when theme changes
@@ -1725,7 +1887,9 @@
                         showTrendline: true,
                         trendlineName: `Trendline ${modalForm.series.length + 1}`,
                         showTrendlineInLegend: true,
-                        excludedPoints: []
+                        excludedPoints: [],
+                        markerShape: 'circle',
+                        plotType: 'line'
                     }]
                 });
             };
@@ -1774,15 +1938,17 @@
                     })).filter(d => !isNaN(d.x) && !isNaN(d.y))
                       .filter(d => !(series.excludedPoints || []).includes(d.rowIndex));
 
-                    return { 
-                        name: series.name, 
-                        data, 
+                    return {
+                        name: series.name,
+                        data,
                         customColor: series.customColor,
                         visible: series.visible !== undefined ? series.visible : true,
                         showTrendline: series.showTrendline !== undefined ? series.showTrendline : true,
                         trendlineName: series.trendlineName || `Trendline for ${series.name}`,
                         showTrendlineInLegend: series.showTrendlineInLegend !== undefined ? series.showTrendlineInLegend : true,
-                        excludedPoints: series.excludedPoints || []
+                        excludedPoints: series.excludedPoints || [],
+                        markerShape: series.markerShape || 'circle',
+                        plotType: series.plotType || 'line'
                     };
                 });
                 
@@ -1796,7 +1962,10 @@
                         legendPosition: modalForm.legendPosition,
                         graphStyle: modalForm.graphStyle,
                         showGrid: modalForm.showGrid,
-                        showTrendline: modalForm.showTrendline
+                        showTrendline: modalForm.showTrendline,
+                        showR2: modalForm.showR2 !== undefined ? modalForm.showR2 : true,
+                        trendlineDashed: modalForm.trendlineDashed !== undefined ? modalForm.trendlineDashed : true,
+                        showMarkers: modalForm.showMarkers !== undefined ? modalForm.showMarkers : true
                     },
                     data: processedData,
                     formData: {
@@ -1808,6 +1977,9 @@
                         graphStyle: modalForm.graphStyle,
                         showGrid: modalForm.showGrid,
                         showTrendline: modalForm.showTrendline,
+                        showR2: modalForm.showR2 !== undefined ? modalForm.showR2 : true,
+                        trendlineDashed: modalForm.trendlineDashed !== undefined ? modalForm.trendlineDashed : true,
+                        showMarkers: modalForm.showMarkers !== undefined ? modalForm.showMarkers : true,
                         series: modalForm.series
                     }
                 };
@@ -1850,9 +2022,14 @@
                         graphStyle: graph.formData.graphStyle || 'research',
                         showGrid: graph.formData.showGrid !== undefined ? graph.formData.showGrid : false,
                         showTrendline: graph.formData.showTrendline !== undefined ? graph.formData.showTrendline : false,
+                        showR2: graph.formData.showR2 !== undefined ? graph.formData.showR2 : true,
+                        trendlineDashed: graph.formData.trendlineDashed !== undefined ? graph.formData.trendlineDashed : true,
+                        showMarkers: graph.formData.showMarkers !== undefined ? graph.formData.showMarkers : true,
                         series: graph.formData.series.map(s => ({
                             ...s,
-                            id: Date.now() + Math.random()
+                            id: Date.now() + Math.random(),
+                            markerShape: s.markerShape || 'circle',
+                            plotType: s.plotType || 'line'
                         }))
                     });
                 } else {
@@ -1865,6 +2042,9 @@
                         graphStyle: graph.config.graphStyle || 'research',
                         showGrid: graph.config.showGrid !== undefined ? graph.config.showGrid : false,
                         showTrendline: graph.config.showTrendline !== undefined ? graph.config.showTrendline : false,
+                        showR2: graph.config.showR2 !== undefined ? graph.config.showR2 : true,
+                        trendlineDashed: graph.config.trendlineDashed !== undefined ? graph.config.trendlineDashed : true,
+                        showMarkers: graph.config.showMarkers !== undefined ? graph.config.showMarkers : true,
                         series: graph.data.map((series, idx) => ({
                             id: Date.now() + idx,
                             name: series.name,
@@ -1875,7 +2055,9 @@
                             yErrorColumn: '',
                             customColor: series.customColor || '',
                             visible: series.visible !== undefined ? series.visible : true,
-                            showTrendline: series.showTrendline !== undefined ? series.showTrendline : true
+                            showTrendline: series.showTrendline !== undefined ? series.showTrendline : true,
+                            markerShape: series.markerShape || 'circle',
+                            plotType: series.plotType || 'line'
                         }))
                     });
                 }
@@ -2238,12 +2420,24 @@
                                                         </button>
                                                     </div>
                                                 </div>
-                                                <div 
-                                                    id={`graph-${graph.id}`} 
-                                                    className={effectiveStyle === 'dashboard' ? '' : 'bg-white p-2'}
+                                                <div
+                                                    id={`graph-${graph.id}`}
+                                                    className={effectiveStyle === 'dashboard' ? 'relative' : 'bg-white p-2 relative'}
                                                     onClick={() => setFullscreenGraph(graph)}
+                                                    style={{ userSelect: 'none' }}
                                                 >
-                                                    <D3Graph key={`${graph.id}-${renderKey}`} config={effectiveConfig} data={graph.data} id={graph.id} theme={theme} />
+                                                    <D3Graph key={`${graph.id}-${renderKey}`} config={effectiveConfig} data={graph.data} id={graph.id} theme={theme} cardHeight={graph.cardHeight || 400} />
+                                                    <div
+                                                        className="resize-handle"
+                                                        onMouseDown={(e) => {
+                                                            e.stopPropagation();
+                                                            handleResizeMouseDown(e, graph);
+                                                        }}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        title="Drag to resize"
+                                                    >
+                                                        <div className="resize-handle-bar" />
+                                                    </div>
                                                 </div>
                                             </div>
                                         )})}
@@ -2324,19 +2518,68 @@
                                             </label>
                                         </div>
 
-                                        <div>
-                                            <label className="flex items-center gap-3 cursor-pointer p-4 rounded-lg bg-gray-800/30 border-2 border-gray-700 hover:border-gray-600 transition-all">
+                                        {/* Display Options Group */}
+                                        <div className="p-4 bg-gray-800/20 rounded-xl border border-gray-700/50 space-y-3">
+                                            <p className="text-gray-300 text-sm font-semibold mb-2">Display Options</p>
+
+                                            {/* Show Markers */}
+                                            <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg bg-gray-800/30 border border-gray-700 hover:border-gray-600 transition-all">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={modalForm.showMarkers !== false}
+                                                    onChange={(e) => setModalForm({...modalForm, showMarkers: e.target.checked})}
+                                                    className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500"
+                                                />
+                                                <div>
+                                                    <span className="text-white font-medium block text-sm">Show Data Markers</span>
+                                                    <span className="text-xs text-gray-400">Display marker symbols at each data point</span>
+                                                </div>
+                                            </label>
+
+                                            {/* Show Trendline */}
+                                            <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg bg-gray-800/30 border border-gray-700 hover:border-gray-600 transition-all">
                                                 <input
                                                     type="checkbox"
                                                     checked={modalForm.showTrendline}
                                                     onChange={(e) => setModalForm({...modalForm, showTrendline: e.target.checked})}
-                                                    className="w-5 h-5 rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500 focus:ring-2"
+                                                    className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500"
                                                 />
                                                 <div>
-                                                    <span className="text-white font-semibold block">Show Trendline & Statistics</span>
-                                                    <span className="text-xs text-gray-400">Display line of best fit with equation and R² value</span>
+                                                    <span className="text-white font-medium block text-sm">Show Trendline</span>
+                                                    <span className="text-xs text-gray-400">Display line of best fit (linear regression)</span>
                                                 </div>
                                             </label>
+
+                                            {/* Trendline sub-options (only when trendline enabled) */}
+                                            {modalForm.showTrendline && (
+                                                <div className="ml-7 space-y-2 pl-3 border-l-2 border-blue-500/30">
+                                                    <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg bg-gray-800/30 border border-gray-700 hover:border-gray-600 transition-all">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={modalForm.showR2 !== false}
+                                                            onChange={(e) => setModalForm({...modalForm, showR2: e.target.checked})}
+                                                            className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500"
+                                                        />
+                                                        <div>
+                                                            <span className="text-white font-medium block text-sm">Show R² & Equation</span>
+                                                            <span className="text-xs text-gray-400">Display the draggable annotation box with equation and R² value</span>
+                                                        </div>
+                                                    </label>
+
+                                                    <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg bg-gray-800/30 border border-gray-700 hover:border-gray-600 transition-all">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={modalForm.trendlineDashed !== false}
+                                                            onChange={(e) => setModalForm({...modalForm, trendlineDashed: e.target.checked})}
+                                                            className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500"
+                                                        />
+                                                        <div>
+                                                            <span className="text-white font-medium block text-sm">Dashed Trendline</span>
+                                                            <span className="text-xs text-gray-400">Use dashed style (off = solid line)</span>
+                                                        </div>
+                                                    </label>
+                                                </div>
+                                            )}
                                         </div>
 
                                         <div>
@@ -2439,6 +2682,55 @@
                                                             </label>
                                                         )}
                                                     </div>
+
+                                                    {/* Plot Type */}
+                                                    <div className="mb-3">
+                                                        <label className="text-xs text-gray-400 block mb-1.5">Plot Type</label>
+                                                        <div className="flex gap-2">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => updateSeries(series.id, 'plotType', 'line')}
+                                                                className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-all border ${(series.plotType || 'line') === 'line' ? 'bg-blue-600/30 border-blue-500 text-blue-300' : 'bg-gray-800/50 border-gray-700 text-gray-400 hover:border-gray-600'}`}
+                                                            >
+                                                                〜 Line
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => updateSeries(series.id, 'plotType', 'scatter')}
+                                                                className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-all border ${series.plotType === 'scatter' ? 'bg-blue-600/30 border-blue-500 text-blue-300' : 'bg-gray-800/50 border-gray-700 text-gray-400 hover:border-gray-600'}`}
+                                                            >
+                                                                ⠿ Scatter
+                                                            </button>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Marker Shape */}
+                                                    {modalForm.showMarkers !== false && (
+                                                        <div className="mb-3">
+                                                            <label className="text-xs text-gray-400 block mb-1.5">Marker Shape</label>
+                                                            <div className="flex gap-1.5 flex-wrap">
+                                                                {[
+                                                                    { shape: 'circle', label: '●', title: 'Circle' },
+                                                                    { shape: 'square', label: '■', title: 'Square' },
+                                                                    { shape: 'triangle', label: '▲', title: 'Triangle' },
+                                                                    { shape: 'diamond', label: '◆', title: 'Diamond' },
+                                                                    { shape: 'cross', label: '✚', title: 'Cross' },
+                                                                    { shape: 'star', label: '★', title: 'Star' },
+                                                                    { shape: 'wye', label: '⌘', title: 'Wye' },
+                                                                ].map(({ shape, label, title }) => (
+                                                                    <button
+                                                                        key={shape}
+                                                                        type="button"
+                                                                        title={title}
+                                                                        onClick={() => updateSeries(series.id, 'markerShape', shape)}
+                                                                        className={`marker-shape-btn bg-gray-800/60 ${(series.markerShape || 'circle') === shape ? 'active' : ''}`}
+                                                                    >
+                                                                        <span className="text-base leading-none" style={{ color: series.customColor || COLOR_PALETTES[modalForm.palette].colors[idx % COLOR_PALETTES[modalForm.palette].colors.length] }}>{label}</span>
+                                                                    </button>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
                                                     
                                                     {modalForm.showTrendline && series.showTrendline !== false && (
                                                         <div className="mb-3 p-3 bg-gray-900/40 rounded-lg border border-purple-500/30">
