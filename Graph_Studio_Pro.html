@@ -1004,7 +1004,8 @@
                 yAxesConfig.forEach((axisConf) => {
                     const scale = yScales[axisConf.id];
                     const axisColor = axisConf.color || labelColor;
-                    const label = axisConf.label || '';
+                    // Fall back to config.yLabel for the primary axis (backward compat & auto-generated labels)
+                    const label = axisConf.label || (axisConf.id === 'y1' ? (config.yLabel || 'Y-axis') : '');
 
                     if (axisConf.position === 'left') {
                         const leftIdx = leftYAxes.indexOf(axisConf);
@@ -1052,7 +1053,8 @@
                 xAxesConfig.forEach((axisConf) => {
                     const scale = xScales[axisConf.id];
                     const axisColor = axisConf.color || labelColor;
-                    const label = axisConf.label || '';
+                    // Fall back to config.xLabel for the primary axis (backward compat & auto-generated labels)
+                    const label = axisConf.label || (axisConf.id === 'x1' ? (config.xLabel || 'X-axis') : '');
 
                     if (axisConf.position === 'bottom') {
                         const bottomIdx = bottomXAxes.indexOf(axisConf);
@@ -1959,8 +1961,8 @@
             
             const theme = THEMES[currentTheme];
             const defaultAxes = () => [
-                { id: 'y1', type: 'y', position: 'left', label: 'Y Axis', color: '' },
-                { id: 'x1', type: 'x', position: 'bottom', label: 'X Axis', color: '' }
+                { id: 'y1', type: 'y', position: 'left', label: '', color: '' },
+                { id: 'x1', type: 'x', position: 'bottom', label: '', color: '' }
             ];
             const [modalForm, setModalForm] = useState({
                 title: '',
@@ -2172,7 +2174,14 @@
                     };
                 });
 
-                const axesForConfig = modalForm.axes && modalForm.axes.length > 0 ? modalForm.axes : defaultAxes();
+                // Sync the primary axis labels with the auto-computed x/y labels
+                // (covers the case where labels are auto-filled from column names, not typed manually)
+                const rawAxes = modalForm.axes && modalForm.axes.length > 0 ? modalForm.axes : defaultAxes();
+                const axesForConfig = rawAxes.map(a => {
+                    if (a.id === 'x1' && a.type === 'x') return { ...a, label: autoXLabel };
+                    if (a.id === 'y1' && a.type === 'y') return { ...a, label: autoYLabel };
+                    return a;
+                });
 
                 const graphObj = {
                     id: editingGraph ? editingGraph.id : Date.now(),
@@ -2731,11 +2740,29 @@
                                             <div className="grid grid-cols-2 gap-3">
                                                 <div>
                                                     <label className="block text-gray-300 text-sm mb-1.5">X-axis Label</label>
-                                                    <input type="text" value={modalForm.xLabel} onChange={(e) => setModalForm({...modalForm, xLabel: e.target.value})} className="w-full px-3 py-2 bg-gray-800/50 text-white border border-gray-700 rounded-lg text-sm" placeholder="X-axis" />
+                                                    <input type="text" value={modalForm.xLabel} onChange={(e) => {
+                                                        const v = e.target.value;
+                                                        setModalForm({
+                                                            ...modalForm,
+                                                            xLabel: v,
+                                                            axes: (modalForm.axes || []).map(a =>
+                                                                a.id === 'x1' && a.type === 'x' ? { ...a, label: v } : a
+                                                            )
+                                                        });
+                                                    }} className="w-full px-3 py-2 bg-gray-800/50 text-white border border-gray-700 rounded-lg text-sm" placeholder="X-axis" />
                                                 </div>
                                                 <div>
                                                     <label className="block text-gray-300 text-sm mb-1.5">Y-axis Label</label>
-                                                    <input type="text" value={modalForm.yLabel} onChange={(e) => setModalForm({...modalForm, yLabel: e.target.value})} className="w-full px-3 py-2 bg-gray-800/50 text-white border border-gray-700 rounded-lg text-sm" placeholder="Y-axis" />
+                                                    <input type="text" value={modalForm.yLabel} onChange={(e) => {
+                                                        const v = e.target.value;
+                                                        setModalForm({
+                                                            ...modalForm,
+                                                            yLabel: v,
+                                                            axes: (modalForm.axes || []).map(a =>
+                                                                a.id === 'y1' && a.type === 'y' ? { ...a, label: v } : a
+                                                            )
+                                                        });
+                                                    }} className="w-full px-3 py-2 bg-gray-800/50 text-white border border-gray-700 rounded-lg text-sm" placeholder="Y-axis" />
                                                 </div>
                                             </div>
                                         </div>
@@ -2945,13 +2972,22 @@
                                                             <span className={`text-xs font-bold px-2 py-0.5 rounded ${isY ? 'bg-blue-600/20 text-blue-300' : 'bg-purple-600/20 text-purple-300'}`}>
                                                                 {axis.id.toUpperCase()}
                                                             </span>
-                                                            <input
-                                                                type="text"
-                                                                value={axis.label}
-                                                                onChange={(e) => updateAxis(axis.id, 'label', e.target.value)}
-                                                                placeholder="Axis label"
-                                                                className="flex-1 px-2 py-1 bg-gray-800/50 text-white border border-gray-700 rounded text-xs"
-                                                            />
+                                                            {(axis.id === 'y1' || axis.id === 'x1') ? (
+                                                                <span
+                                                                    className="flex-1 px-2 py-1 bg-gray-900/40 text-gray-400 border border-gray-700/40 rounded text-xs italic truncate"
+                                                                    title={`Label is set by the ${axis.id === 'x1' ? 'X' : 'Y'}-axis Label field above`}
+                                                                >
+                                                                    {axis.label || (axis.id === 'x1' ? 'X-axis' : 'Y-axis')} <span className="text-gray-600 not-italic">(from label above)</span>
+                                                                </span>
+                                                            ) : (
+                                                                <input
+                                                                    type="text"
+                                                                    value={axis.label}
+                                                                    onChange={(e) => updateAxis(axis.id, 'label', e.target.value)}
+                                                                    placeholder="Axis label"
+                                                                    className="flex-1 px-2 py-1 bg-gray-800/50 text-white border border-gray-700 rounded text-xs"
+                                                                />
+                                                            )}
                                                             <select
                                                                 value={axis.position}
                                                                 onChange={(e) => updateAxis(axis.id, 'position', e.target.value)}
