@@ -25,38 +25,115 @@
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
         }
         
+        /* ── Card resize wrapper (outer, owns the explicit pixel size) ── */
         .graph-card {
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
             position: relative;
-            overflow: hidden;
+            flex-shrink: 0;
+            flex-grow: 0;
+            /* transitions only on shadow/border – NOT transform, which fights resize */
+            transition: box-shadow 0.35s cubic-bezier(0.4,0,0.2,1),
+                        border-color 0.35s ease;
         }
-        
-        .graph-card::before {
+
+        /* Inner card content — this is where overflow clipping lives */
+        .graph-card-inner {
+            overflow: hidden;
+            border-radius: 0.75rem;   /* rounded-xl */
+            width: 100%;
+            position: relative;
+        }
+
+        .graph-card-inner::before {
             content: '';
             position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
+            top: 0; left: 0; right: 0;
             height: 3px;
             background: linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899);
             opacity: 0;
             transition: opacity 0.3s ease;
+            z-index: 1;
         }
-        
-        .graph-card:hover::before {
+
+        .graph-card:hover .graph-card-inner::before {
             opacity: 1;
         }
-        
-        .graph-card:hover {
-            transform: translateY(-4px);
+
+        .graph-card:hover .graph-card-inner {
             box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
             border-color: rgba(255, 255, 255, 0.15);
         }
-        
-        .graph-card:active {
-            cursor: grabbing !important;
-            opacity: 0.7;
-            transform: scale(0.98) translateY(-2px);
+
+        /* suppress hover lift while a resize drag is active */
+        .graph-card.resizing .graph-card-inner {
+            transition: none !important;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3) !important;
+        }
+
+        /* ── Resize handles (live OUTSIDE graph-card-inner, so overflow:hidden
+              on inner doesn't clip them) ── */
+
+        /* South edge — height */
+        .resize-edge-s {
+            position: absolute;
+            bottom: -7px;
+            left: 24px; right: 24px;
+            height: 14px;
+            cursor: ns-resize;
+            display: flex; align-items: center; justify-content: center;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            z-index: 25;
+        }
+        /* East edge — width */
+        .resize-edge-e {
+            position: absolute;
+            right: -7px;
+            top: 24px; bottom: 24px;
+            width: 14px;
+            cursor: ew-resize;
+            display: flex; align-items: center; justify-content: center;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            z-index: 25;
+        }
+        /* South-East corner — both */
+        .resize-corner-se {
+            position: absolute;
+            bottom: -7px; right: -7px;
+            width: 20px; height: 20px;
+            cursor: nwse-resize;
+            display: flex; align-items: flex-end; justify-content: flex-end;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            z-index: 26;
+        }
+
+        .graph-card:hover .resize-edge-s,
+        .graph-card:hover .resize-edge-e,
+        .graph-card:hover .resize-corner-se,
+        .graph-card.resizing .resize-edge-s,
+        .graph-card.resizing .resize-edge-e,
+        .graph-card.resizing .resize-corner-se { opacity: 1; }
+
+        /* Handle pip visuals */
+        .resize-pip-h {
+            width: 38px; height: 4px;
+            border-radius: 2px;
+            background: rgba(255,255,255,0.45);
+            pointer-events: none;
+        }
+        .resize-pip-v {
+            height: 38px; width: 4px;
+            border-radius: 2px;
+            background: rgba(255,255,255,0.45);
+            pointer-events: none;
+        }
+        .resize-pip-corner {
+            width: 11px; height: 11px;
+            border-right: 3px solid rgba(255,255,255,0.5);
+            border-bottom: 3px solid rgba(255,255,255,0.5);
+            border-radius: 0 0 4px 0;
+            pointer-events: none;
         }
         
         .custom-scrollbar::-webkit-scrollbar {
@@ -342,42 +419,6 @@
             z-index: 9999;
         }
 
-        /* Card Resize Handle */
-        .resize-handle {
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            height: 10px;
-            cursor: ns-resize;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            opacity: 0;
-            transition: opacity 0.2s ease;
-            z-index: 10;
-        }
-
-        .graph-card:hover .resize-handle {
-            opacity: 1;
-        }
-
-        .resize-handle-bar {
-            width: 40px;
-            height: 4px;
-            border-radius: 2px;
-            background: rgba(255, 255, 255, 0.4);
-            pointer-events: none;
-        }
-
-        .graph-card.is-resizing {
-            transition: none !important;
-            user-select: none;
-        }
-
-        .graph-card.is-resizing .resize-handle {
-            opacity: 1;
-        }
 
         /* Marker shape picker */
         .marker-shape-btn {
@@ -796,7 +837,7 @@
             }
         };
 
-        const D3Graph = ({ config, data, id, isFullscreen = false, theme, cardHeight }) => {
+        const D3Graph = ({ config, data, id, isFullscreen = false, theme, cardHeight, cardWidth }) => {
             const svgRef = useRef(null);
             const containerRef = useRef(null);
             const isDashboard = config.graphStyle === 'dashboard';
@@ -815,22 +856,35 @@
                 
                 // Filter to only visible series
                 const visibleData = data.filter(series => series.visible !== false);
-                
-                // Dynamic margins based on legend position and style
+
+                // ── Multi-axis configuration ──────────────────────────────────────────────
+                // Legacy graphs (no config.axes) automatically get one X and one Y axis.
+                const axesCfg = (config.axes && config.axes.length > 0)
+                    ? config.axes
+                    : [
+                        { id: 'x1', type: 'x', position: 'bottom', label: config.xLabel || 'X-axis', color: null },
+                        { id: 'y1', type: 'y', position: 'left',   label: config.yLabel || 'Y-axis', color: null }
+                      ];
+
+                const yLeftAxes   = axesCfg.filter(a => a.type === 'y' && a.position !== 'right');
+                const yRightAxes  = axesCfg.filter(a => a.type === 'y' && a.position === 'right');
+                const xBottomAxes = axesCfg.filter(a => a.type === 'x' && a.position !== 'top');
+                const xTopAxes    = axesCfg.filter(a => a.type === 'x' && a.position === 'top');
+
                 const hasMultipleSeries = visibleData.length > 1;
-                const legendPosition = config.legendPosition || 'auto';
-                const legendWidth = hasMultipleSeries ? 160 : 0;
-                
-                let margin = isDashboard 
-                    ? { top: 80, right: 60, bottom: 80, left: 90 }
-                    : { top: 60, right: 40, bottom: 80, left: 90 };
-                
-                if (legendPosition === 'outside-right' && hasMultipleSeries) {
-                    margin.right = legendWidth + 30;
-                }
-                
-                const width = containerWidth - margin.left - margin.right;
-                const height = containerHeight - margin.top - margin.bottom;
+                const legendPosition    = config.legendPosition || 'auto';
+
+                // Space per stacked axis (px). Each extra axis adds one slot.
+                const AXIS_SLOT = 68;
+                const margin = {
+                    left:   Math.max(isDashboard ? 30 : 20, yLeftAxes.length  * AXIS_SLOT),
+                    right:  Math.max(20, yRightAxes.length * AXIS_SLOT + (legendPosition === 'outside-right' && hasMultipleSeries ? 170 : 0)),
+                    top:    (isDashboard ? 40 : 20) + Math.max(isDashboard ? 40 : 40, xTopAxes.length * 50),
+                    bottom: 30 + Math.max(50, xBottomAxes.length * 50)
+                };
+
+                const width  = containerWidth  - margin.left - margin.right;
+                const height = containerHeight - margin.top  - margin.bottom;
 
                 d3.select(svgRef.current).selectAll("*").remove();
 
@@ -842,154 +896,170 @@
 
                 // Background
                 if (isDashboard) {
-                    svg.append('rect')
-                        .attr('width', containerWidth)
-                        .attr('height', containerHeight)
+                    svg.append('rect').attr('width', containerWidth).attr('height', containerHeight)
                         .attr('fill', theme?.graph?.bg || '#1e293b');
                 } else {
-                    svg.append('rect')
-                        .attr('width', containerWidth)
-                        .attr('height', containerHeight)
+                    svg.append('rect').attr('width', containerWidth).attr('height', containerHeight)
                         .attr('fill', '#ffffff');
                 }
 
-                const g = svg.append('g')
-                    .attr('transform', `translate(${margin.left},${margin.top})`);
+                const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
 
-                const allX = visibleData.flatMap(series => series.data.map(d => d.x)).filter(v => v != null && !isNaN(v));
-                const allY = visibleData.flatMap(series => series.data.map(d => d.y)).filter(v => v != null && !isNaN(v));
-                const allXErrors = visibleData.flatMap(series => series.data.filter(d => d.xError).map(d => d.xError)).filter(v => v != null && !isNaN(v));
-                const allYErrors = visibleData.flatMap(series => series.data.filter(d => d.yError).map(d => d.yError)).filter(v => v != null && !isNaN(v));
-
-                // Include trendline endpoints in range calculation
-                const trendlinePoints = [];
-                if (config.showTrendline) {
-                    visibleData.forEach(series => {
-                        if (series.showTrendline !== false && series.data.length >= 2) {
-                            const validData = series.data.filter(d => d.x != null && d.y != null && !isNaN(d.x) && !isNaN(d.y));
-                            if (validData.length >= 2) {
-                                const regression = calculateLinearRegression(validData);
-                                if (regression) {
-                                    const xMin = d3.min(validData, d => d.x);
-                                    const xMax = d3.max(validData, d => d.x);
-                                    trendlinePoints.push(
-                                        { x: xMin, y: regression.slope * xMin + regression.intercept },
-                                        { x: xMax, y: regression.slope * xMax + regression.intercept }
-                                    );
+                // ── Build a scale for every axis ──────────────────────────────────────────
+                const axisScales = {};
+                axesCfg.forEach(axConf => {
+                    const relSeries = visibleData.filter(s =>
+                        axConf.type === 'x'
+                            ? (s.xAxisId || 'x1') === axConf.id
+                            : (s.yAxisId || 'y1') === axConf.id
+                    );
+                    let vals = [];
+                    if (axConf.type === 'x') {
+                        vals = relSeries.flatMap(s => [
+                            ...s.data.map(d => d.x),
+                            ...s.data.filter(d => d.xError).flatMap(d => [d.x - d.xError, d.x + d.xError])
+                        ]).filter(v => v != null && !isNaN(v));
+                        if (config.showTrendline) {
+                            relSeries.forEach(s => {
+                                if (s.showTrendline !== false) {
+                                    const vd = s.data.filter(d => d.x != null && d.y != null && !isNaN(d.x) && !isNaN(d.y));
+                                    if (vd.length >= 2) vals.push(...vd.map(d => d.x));
                                 }
-                            }
+                            });
                         }
-                    });
+                    } else {
+                        vals = relSeries.flatMap(s => [
+                            ...s.data.map(d => d.y),
+                            ...s.data.filter(d => d.yError).flatMap(d => [d.y - d.yError, d.y + d.yError])
+                        ]).filter(v => v != null && !isNaN(v));
+                        if (config.showTrendline) {
+                            relSeries.forEach(s => {
+                                if (s.showTrendline !== false) {
+                                    const vd = s.data.filter(d => d.x != null && d.y != null && !isNaN(d.x) && !isNaN(d.y));
+                                    if (vd.length >= 2) {
+                                        const reg = calculateLinearRegression(vd);
+                                        if (reg) {
+                                            const x0 = d3.min(vd, d => d.x), x1e = d3.max(vd, d => d.x);
+                                            vals.push(reg.slope * x0 + reg.intercept, reg.slope * x1e + reg.intercept);
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    if (vals.length === 0) return;
+                    const lo = d3.min(vals), hi = d3.max(vals);
+                    axisScales[axConf.id] = axConf.type === 'x'
+                        ? d3.scaleLinear().domain([lo, hi]).range([0, width]).nice()
+                        : d3.scaleLinear().domain([lo, hi]).range([height, 0]).nice();
+                });
+
+                // Primary scales used for grid lines and reading mode
+                const primaryXId    = (axesCfg.find(a => a.type === 'x') || {}).id || 'x1';
+                const primaryYId    = (axesCfg.find(a => a.type === 'y') || {}).id || 'y1';
+                const xScale        = axisScales[primaryXId];
+                const yScale        = axisScales[primaryYId];
+
+                const getSeriesScales = (series) => ({
+                    xScale: axisScales[series.xAxisId || primaryXId] || xScale,
+                    yScale: axisScales[series.yAxisId || primaryYId] || yScale
+                });
+
+                // ── Grid (primary axes) ───────────────────────────────────────────────────
+                if (isDashboard && config.showGrid !== false && xScale && yScale) {
+                    g.append('g').attr('class', 'grid').attr('transform', `translate(0,${height})`)
+                        .call(d3.axisBottom(xScale).ticks(8).tickSize(-height).tickFormat(''))
+                        .selectAll('line').attr('class', 'grid-line');
+                    g.append('g').attr('class', 'grid')
+                        .call(d3.axisLeft(yScale).ticks(8).tickSize(-width).tickFormat(''))
+                        .selectAll('line').attr('class', 'grid-line');
                 }
-                
-                const allXWithTrend = [...allX, ...trendlinePoints.map(p => p.x)];
-                const allYWithTrend = [...allY, ...trendlinePoints.map(p => p.y)];
 
-                const xMin = d3.min(allXWithTrend) - (allXErrors.length > 0 ? d3.max(allXErrors) : 0);
-                const xMax = d3.max(allXWithTrend) + (allXErrors.length > 0 ? d3.max(allXErrors) : 0);
-                const yMin = d3.min(allYWithTrend) - (allYErrors.length > 0 ? d3.max(allYErrors) : 0);
-                const yMax = d3.max(allYWithTrend) + (allYErrors.length > 0 ? d3.max(allYErrors) : 0);
+                // ── Render all axes ───────────────────────────────────────────────────────
+                const axisBaseColor = isDashboard ? (theme?.graph?.axisColor || '#475569') : '#000000';
+                const tickTextColor = isDashboard ? (theme?.graph?.textColor || '#94a3b8') : '#000000';
+                const labelColor    = isDashboard ? '#94a3b8' : '#000000';
 
-                const xScale = d3.scaleLinear()
-                    .domain([xMin, xMax])
-                    .range([0, width])
-                    .nice();
+                const styleAxis = (axG, axConf) => {
+                    const col = axConf.color || axisBaseColor;
+                    const tcol = axConf.color || tickTextColor;
+                    axG.selectAll('path, line').attr('class', 'axis-line').attr('stroke', col);
+                    axG.selectAll('text').attr('fill', tcol).style('font-size', '12px');
+                };
 
-                const yScale = d3.scaleLinear()
-                    .domain([yMin, yMax])
-                    .range([height, 0])
-                    .nice();
+                // X-bottom axes (stacked downward for each extra axis)
+                xBottomAxes.forEach((axConf, i) => {
+                    const scale = axisScales[axConf.id]; if (!scale) return;
+                    const yOff = height + i * 50;
+                    const axG = g.append('g').attr('class', 'x-axis')
+                        .attr('transform', `translate(0,${yOff})`).call(d3.axisBottom(scale).ticks(8));
+                    styleAxis(axG, axConf);
+                    g.append('text').attr('class', 'axis-label').attr('text-anchor', 'middle')
+                        .attr('x', width / 2).attr('y', yOff + 46)
+                        .attr('fill', axConf.color || labelColor).text(axConf.label || 'X-axis');
+                });
 
-                // Grid lines for dashboard
-                if (isDashboard && config.showGrid !== false) {
-                    const xGrid = d3.axisBottom(xScale).ticks(8).tickSize(-height).tickFormat('');
-                    const yGrid = d3.axisLeft(yScale).ticks(8).tickSize(-width).tickFormat('');
-                    
-                    g.append('g')
-                        .attr('class', 'grid')
-                        .attr('transform', `translate(0,${height})`)
-                        .call(xGrid)
-                        .selectAll('line')
-                        .attr('class', 'grid-line');
-                        
-                    g.append('g')
-                        .attr('class', 'grid')
-                        .call(yGrid)
-                        .selectAll('line')
-                        .attr('class', 'grid-line');
-                }
+                // X-top axes (stacked upward)
+                xTopAxes.forEach((axConf, i) => {
+                    const scale = axisScales[axConf.id]; if (!scale) return;
+                    const yOff = -(i * 50);
+                    const axG = g.append('g').attr('class', 'x-axis')
+                        .attr('transform', `translate(0,${yOff})`).call(d3.axisTop(scale).ticks(8));
+                    styleAxis(axG, axConf);
+                    g.append('text').attr('class', 'axis-label').attr('text-anchor', 'middle')
+                        .attr('x', width / 2).attr('y', yOff - 30)
+                        .attr('fill', axConf.color || labelColor).text(axConf.label || 'X-axis');
+                });
 
-                const xAxis = d3.axisBottom(xScale).ticks(8);
-                const yAxis = d3.axisLeft(yScale).ticks(8);
+                // Y-left axes (stacked leftward)
+                yLeftAxes.forEach((axConf, i) => {
+                    const scale = axisScales[axConf.id]; if (!scale) return;
+                    const xOff = -(i * AXIS_SLOT);
+                    const axG = g.append('g').attr('class', 'y-axis')
+                        .attr('transform', `translate(${xOff},0)`).call(d3.axisLeft(scale).ticks(8));
+                    styleAxis(axG, axConf);
+                    g.append('text').attr('class', 'axis-label').attr('text-anchor', 'middle')
+                        .attr('transform', 'rotate(-90)')
+                        .attr('x', -height / 2).attr('y', xOff - 46)
+                        .attr('fill', axConf.color || labelColor).text(axConf.label || 'Y-axis');
+                });
 
-                g.append('g')
-                    .attr('class', 'x-axis')
-                    .attr('transform', `translate(0,${height})`)
-                    .call(xAxis)
-                    .selectAll('path, line')
-                    .attr('class', 'axis-line');
+                // Y-right axes (stacked rightward)
+                yRightAxes.forEach((axConf, i) => {
+                    const scale = axisScales[axConf.id]; if (!scale) return;
+                    const xOff = width + i * AXIS_SLOT;
+                    const axG = g.append('g').attr('class', 'y-axis')
+                        .attr('transform', `translate(${xOff},0)`).call(d3.axisRight(scale).ticks(8));
+                    styleAxis(axG, axConf);
+                    g.append('text').attr('class', 'axis-label').attr('text-anchor', 'middle')
+                        .attr('transform', 'rotate(90)')
+                        .attr('x', height / 2).attr('y', -(xOff + 46))
+                        .attr('fill', axConf.color || labelColor).text(axConf.label || 'Y-axis');
+                });
 
-                g.append('g')
-                    .attr('class', 'y-axis')
-                    .call(yAxis)
-                    .selectAll('path, line')
-                    .attr('class', 'axis-line');
-
-                // Axis labels
-                const labelColor = isDashboard ? '#94a3b8' : '#000000';
-                g.append('text')
-                    .attr('class', 'axis-label')
-                    .attr('text-anchor', 'middle')
-                    .attr('x', width / 2)
-                    .attr('y', height + 50)
-                    .attr('fill', labelColor)
-                    .text(config.xLabel || 'X-axis');
-
-                g.append('text')
-                    .attr('class', 'axis-label')
-                    .attr('text-anchor', 'middle')
-                    .attr('transform', 'rotate(-90)')
-                    .attr('x', -height / 2)
-                    .attr('y', -60)
-                    .attr('fill', labelColor)
-                    .text(config.yLabel || 'Y-axis');
-
-                // Title with dashboard stats
+                // ── Title ─────────────────────────────────────────────────────────────────
                 if (isDashboard) {
-                    const titleGroup = svg.append('g')
-                        .attr('class', 'dashboard-stat')
+                    const titleGroup = svg.append('g').attr('class', 'dashboard-stat')
                         .attr('transform', `translate(${margin.left}, 30)`);
-                    
-                    titleGroup.append('text')
-                        .attr('class', 'graph-title')
-                        .attr('text-anchor', 'start')
-                        .attr('x', 0)
-                        .attr('y', 0)
-                        .attr('fill', '#f1f5f9')
-                        .attr('font-size', '20px')
+                    titleGroup.append('text').attr('class', 'graph-title').attr('text-anchor', 'start')
+                        .attr('x', 0).attr('y', 0).attr('fill', '#f1f5f9').attr('font-size', '20px')
                         .text(config.title || 'Graph Title');
-                    
-                    // Add data point count
-                    const totalPoints = data.reduce((sum, series) => sum + series.data.length, 0);
-                    titleGroup.append('text')
-                        .attr('x', 0)
-                        .attr('y', 22)
-                        .attr('fill', '#64748b')
-                        .attr('font-size', '12px')
-                        .attr('font-weight', '500')
+                    const totalPoints = data.reduce((sum, s) => sum + s.data.length, 0);
+                    titleGroup.append('text').attr('x', 0).attr('y', 22).attr('fill', '#64748b')
+                        .attr('font-size', '12px').attr('font-weight', '500')
                         .text(`${totalPoints} data points • ${data.length} series`);
                 } else {
-                    svg.append('text')
-                        .attr('class', 'graph-title')
-                        .attr('text-anchor', 'middle')
-                        .attr('x', containerWidth / 2)
-                        .attr('y', 25)
-                        .attr('fill', '#000000')
+                    svg.append('text').attr('class', 'graph-title').attr('text-anchor', 'middle')
+                        .attr('x', containerWidth / 2).attr('y', 25).attr('fill', '#000000')
                         .text(config.title || 'Graph Title');
                 }
 
                 // Draw data
                 visibleData.forEach((series, idx) => {
+                    // Resolve the scales for this specific series (multi-axis support)
+                    const { xScale, yScale } = getSeriesScales(series);
+                    if (!xScale || !yScale) return; // axis has no data yet
+
                     // Use custom color if provided, otherwise use palette color
                     const paletteColor = COLOR_PALETTES[config.palette || 'midnight']?.colors[idx % (COLOR_PALETTES[config.palette || 'midnight']?.colors.length || 7)] || '#8b5cf6';
                     const color = series.customColor || paletteColor;
@@ -1131,10 +1201,12 @@
                 const trendlineAnnotations = [];
                 
                 visibleData.forEach((series, idx) => {
+                    const { xScale, yScale } = getSeriesScales(series);
+                    if (!xScale || !yScale) return;
                     const paletteColor = COLOR_PALETTES[config.palette || 'midnight']?.colors[idx % (COLOR_PALETTES[config.palette || 'midnight']?.colors.length || 7)] || '#8b5cf6';
                     const color = series.customColor || paletteColor;
                     const validData = series.data.filter(d => d.x != null && d.y != null && !isNaN(d.x) && !isNaN(d.y));
-                    
+
                     if (config.showTrendline && series.showTrendline !== false && validData.length >= 2) {
                         const regression = calculateLinearRegression(validData);
                         if (regression) {
@@ -1571,7 +1643,7 @@
                     });
                 }
 
-            }, [config, data, id, isFullscreen, isDashboard, theme, readingMode, cardHeight]);
+            }, [config, data, id, isFullscreen, isDashboard, theme, readingMode, cardHeight, cardWidth]);
 
             return (
                 <div ref={containerRef} style={{ width: '100%', position: 'relative' }}>
@@ -1747,45 +1819,78 @@
             const [currentTheme, setCurrentTheme] = useState('midnight');
             const [renderKey, setRenderKey] = useState(0);
 
-            // Card resize state (using ref to avoid re-render on each mousemove)
-            const resizeState = useRef({ isResizing: false, startY: 0, startHeight: 0, graphId: null });
+            // Card resize — ref avoids a re-render on every mousemove tick
+            const resizeState = useRef({
+                isResizing: false,
+                startX: 0, startY: 0,
+                startWidth: 460, startHeight: 400,
+                graphId: null,
+                direction: 'se',   // 's' | 'e' | 'se'
+                wrapperEl: null    // DOM node for class toggling
+            });
 
             useEffect(() => {
                 const handleMouseMove = (e) => {
                     if (!resizeState.current.isResizing) return;
-                    const deltaY = e.clientY - resizeState.current.startY;
-                    const newHeight = Math.max(220, Math.min(900, resizeState.current.startHeight + deltaY));
-                    setGraphs(prev => prev.map(g =>
-                        g.id === resizeState.current.graphId
-                            ? { ...g, cardHeight: newHeight }
-                            : g
-                    ));
+                    const { startX, startY, startWidth, startHeight, graphId, direction } = resizeState.current;
+                    const dx = e.clientX - startX;
+                    const dy = e.clientY - startY;
+
+                    setGraphs(prev => prev.map(g => {
+                        if (g.id !== graphId) return g;
+                        const updates = {};
+                        if (direction !== 's')  // horizontal component
+                            updates.cardWidth  = Math.max(300, Math.min(1600, startWidth  + dx));
+                        if (direction !== 'e')  // vertical component
+                            updates.cardHeight = Math.max(220, Math.min(1000, startHeight + dy));
+                        return { ...g, ...updates };
+                    }));
                 };
+
                 const handleMouseUp = () => {
-                    if (resizeState.current.isResizing) {
-                        resizeState.current.isResizing = false;
-                        document.body.style.cursor = '';
-                        document.body.style.userSelect = '';
+                    if (!resizeState.current.isResizing) return;
+                    resizeState.current.isResizing = false;
+                    document.body.style.cursor = '';
+                    document.body.style.userSelect = '';
+                    // remove visual resizing class from wrapper
+                    if (resizeState.current.wrapperEl) {
+                        resizeState.current.wrapperEl.classList.remove('resizing');
+                        resizeState.current.wrapperEl = null;
                     }
                 };
+
                 document.addEventListener('mousemove', handleMouseMove);
-                document.addEventListener('mouseup', handleMouseUp);
+                document.addEventListener('mouseup',   handleMouseUp);
                 return () => {
                     document.removeEventListener('mousemove', handleMouseMove);
-                    document.removeEventListener('mouseup', handleMouseUp);
+                    document.removeEventListener('mouseup',   handleMouseUp);
                 };
             }, []);
 
-            const handleResizeMouseDown = (e, graph) => {
+            // direction: 's' = south (height), 'e' = east (width), 'se' = both
+            const handleResizeMouseDown = (e, graph, direction) => {
                 e.preventDefault();
                 e.stopPropagation();
+
+                // Walk up to the .graph-card wrapper to read its actual pixel size
+                const wrapper = e.currentTarget.parentElement;
+                const rect = wrapper ? wrapper.getBoundingClientRect() : null;
+
+                const cursors = { s: 'ns-resize', e: 'ew-resize', se: 'nwse-resize' };
                 resizeState.current = {
                     isResizing: true,
+                    startX: e.clientX,
                     startY: e.clientY,
+                    // Use actual DOM width so the first drag doesn't jump to a default value
+                    startWidth:  rect ? Math.round(rect.width)  : (graph.cardWidth  || 460),
                     startHeight: graph.cardHeight || 400,
-                    graphId: graph.id
+                    graphId: graph.id,
+                    direction,
+                    wrapperEl: wrapper || null
                 };
-                document.body.style.cursor = 'ns-resize';
+
+                if (wrapper) wrapper.classList.add('resizing');
+                document.body.style.cursor    = cursors[direction];
                 document.body.style.userSelect = 'none';
             };
             
@@ -1802,7 +1907,12 @@
                 showR2: true,
                 trendlineDashed: true,
                 showMarkers: true,
-                series: [{ id: Date.now(), name: 'Series 1', sheet: '', xColumn: '', yColumn: '', xErrorColumn: '', yErrorColumn: '', customColor: '', visible: true, showTrendline: true, trendlineName: 'Trendline 1', showTrendlineInLegend: true, excludedPoints: [], markerShape: 'circle', plotType: 'line' }]
+                // Multi-axis configuration: each entry is one rendered axis
+                axes: [
+                    { id: 'x1', type: 'x', position: 'bottom', label: '', color: null },
+                    { id: 'y1', type: 'y', position: 'left',   label: '', color: null }
+                ],
+                series: [{ id: Date.now(), name: 'Series 1', sheet: '', xColumn: '', yColumn: '', xErrorColumn: '', yErrorColumn: '', customColor: '', visible: true, showTrendline: true, trendlineName: 'Trendline 1', showTrendlineInLegend: true, excludedPoints: [], markerShape: 'circle', plotType: 'line', xAxisId: 'x1', yAxisId: 'y1' }]
             });
 
             // Auto-update graph palettes when theme changes
@@ -1889,7 +1999,9 @@
                         showTrendlineInLegend: true,
                         excludedPoints: [],
                         markerShape: 'circle',
-                        plotType: 'line'
+                        plotType: 'line',
+                        xAxisId: 'x1',
+                        yAxisId: 'y1'
                     }]
                 });
             };
@@ -1909,6 +2021,46 @@
                             return { ...s, [field]: value };
                         }
                         return s;
+                    })
+                });
+            };
+
+            // ── Axis management helpers ──────────────────────────────────────────────
+            const addAxis = (type) => {
+                const existing = modalForm.axes.filter(a => a.type === type);
+                const idx = existing.length + 1;
+                const newId = `${type}${Date.now()}`;
+                const defaultPos = type === 'y'
+                    ? (existing.length % 2 === 0 ? 'left' : 'right')
+                    : (existing.length % 2 === 0 ? 'bottom' : 'top');
+                setModalForm({
+                    ...modalForm,
+                    axes: [...modalForm.axes, { id: newId, type, position: defaultPos, label: '', color: null }]
+                });
+            };
+
+            const updateAxis = (id, field, value) => {
+                setModalForm({
+                    ...modalForm,
+                    axes: modalForm.axes.map(a => a.id === id ? { ...a, [field]: value } : a)
+                });
+            };
+
+            const removeAxis = (id) => {
+                const remaining = modalForm.axes.filter(a => a.id !== id);
+                // Re-assign any series that referenced the removed axis to the first available axis of that type
+                const removed = modalForm.axes.find(a => a.id === id);
+                const fallback = remaining.find(a => a.type === removed.type);
+                setModalForm({
+                    ...modalForm,
+                    axes: remaining,
+                    series: modalForm.series.map(s => {
+                        if (!fallback) return s;
+                        return {
+                            ...s,
+                            xAxisId: (removed.type === 'x' && s.xAxisId === id) ? fallback.id : s.xAxisId,
+                            yAxisId: (removed.type === 'y' && s.yAxisId === id) ? fallback.id : s.yAxisId
+                        };
                     })
                 });
             };
@@ -1948,7 +2100,9 @@
                         showTrendlineInLegend: series.showTrendlineInLegend !== undefined ? series.showTrendlineInLegend : true,
                         excludedPoints: series.excludedPoints || [],
                         markerShape: series.markerShape || 'circle',
-                        plotType: series.plotType || 'line'
+                        plotType: series.plotType || 'line',
+                        xAxisId: series.xAxisId || 'x1',
+                        yAxisId: series.yAxisId || 'y1'
                     };
                 });
                 
@@ -1965,7 +2119,8 @@
                         showTrendline: modalForm.showTrendline,
                         showR2: modalForm.showR2 !== undefined ? modalForm.showR2 : true,
                         trendlineDashed: modalForm.trendlineDashed !== undefined ? modalForm.trendlineDashed : true,
-                        showMarkers: modalForm.showMarkers !== undefined ? modalForm.showMarkers : true
+                        showMarkers: modalForm.showMarkers !== undefined ? modalForm.showMarkers : true,
+                        axes: modalForm.axes || []
                     },
                     data: processedData,
                     formData: {
@@ -1980,6 +2135,7 @@
                         showR2: modalForm.showR2 !== undefined ? modalForm.showR2 : true,
                         trendlineDashed: modalForm.trendlineDashed !== undefined ? modalForm.trendlineDashed : true,
                         showMarkers: modalForm.showMarkers !== undefined ? modalForm.showMarkers : true,
+                        axes: modalForm.axes || [],
                         series: modalForm.series
                     }
                 };
@@ -2012,6 +2168,11 @@
             const editGraph = (graph) => {
                 setEditingGraph(graph);
                 
+                const defaultAxes = [
+                    { id: 'x1', type: 'x', position: 'bottom', label: '', color: null },
+                    { id: 'y1', type: 'y', position: 'left',   label: '', color: null }
+                ];
+
                 if (graph.formData) {
                     setModalForm({
                         title: graph.formData.title,
@@ -2025,11 +2186,14 @@
                         showR2: graph.formData.showR2 !== undefined ? graph.formData.showR2 : true,
                         trendlineDashed: graph.formData.trendlineDashed !== undefined ? graph.formData.trendlineDashed : true,
                         showMarkers: graph.formData.showMarkers !== undefined ? graph.formData.showMarkers : true,
+                        axes: graph.formData.axes && graph.formData.axes.length > 0 ? graph.formData.axes : defaultAxes,
                         series: graph.formData.series.map(s => ({
                             ...s,
                             id: Date.now() + Math.random(),
                             markerShape: s.markerShape || 'circle',
-                            plotType: s.plotType || 'line'
+                            plotType: s.plotType || 'line',
+                            xAxisId: s.xAxisId || 'x1',
+                            yAxisId: s.yAxisId || 'y1'
                         }))
                     });
                 } else {
@@ -2045,6 +2209,7 @@
                         showR2: graph.config.showR2 !== undefined ? graph.config.showR2 : true,
                         trendlineDashed: graph.config.trendlineDashed !== undefined ? graph.config.trendlineDashed : true,
                         showMarkers: graph.config.showMarkers !== undefined ? graph.config.showMarkers : true,
+                        axes: graph.config.axes && graph.config.axes.length > 0 ? graph.config.axes : defaultAxes,
                         series: graph.data.map((series, idx) => ({
                             id: Date.now() + idx,
                             name: series.name,
@@ -2057,7 +2222,9 @@
                             visible: series.visible !== undefined ? series.visible : true,
                             showTrendline: series.showTrendline !== undefined ? series.showTrendline : true,
                             markerShape: series.markerShape || 'circle',
-                            plotType: series.plotType || 'line'
+                            plotType: series.plotType || 'line',
+                            xAxisId: series.xAxisId || 'x1',
+                            yAxisId: series.yAxisId || 'y1'
                         }))
                     });
                 }
@@ -2345,99 +2512,107 @@
                                         </div>
                                     </div>
                                 ) : (
-                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                    {/* flex-wrap + items-start = each card is only as tall as its OWN content;
+                                        no grid row stretching, so shrinking works correctly */}
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'flex-start' }}>
                                         {graphs.map((graph) => {
                                             const effectiveStyle = getEffectiveGraphStyle(graph);
                                             const effectiveConfig = { ...graph.config, graphStyle: effectiveStyle };
-                                            
+                                            const cw = graph.cardWidth;   // undefined until user resizes
+                                            const ch = graph.cardHeight || 400;
+
                                             return (
-                                            <div 
-                                                key={graph.id} 
-                                                className="glass-effect rounded-xl overflow-hidden graph-card"
+                                            /* ── Outer wrapper: owns the explicit pixel size & resize handles ── */
+                                            <div
+                                                key={graph.id}
+                                                className="graph-card"
                                                 draggable="true"
-                                                onDragStart={(e) => handleDragStart(e, graph)}
+                                                onDragStart={(e) => {
+                                                    if (resizeState.current.isResizing) { e.preventDefault(); return; }
+                                                    handleDragStart(e, graph);
+                                                }}
                                                 onDragOver={handleDragOver}
                                                 onDrop={(e) => handleDrop(e, graph)}
                                                 onDragEnd={handleDragEnd}
-                                                style={{ cursor: draggedGraph?.id === graph.id ? 'grabbing' : 'grab' }}
+                                                style={{
+                                                    // explicit pixel width when user has resized, otherwise flex-basis for responsive 3-col default
+                                                    width:     cw ? `${cw}px` : undefined,
+                                                    flexBasis: cw ? undefined  : 'calc(33.333% - 11px)',
+                                                    minWidth: '300px',
+                                                    cursor: draggedGraph?.id === graph.id ? 'grabbing' : 'grab',
+                                                }}
                                             >
-                                                <div className="bg-gray-800/40 p-3 border-b border-white/10 flex items-center justify-between backdrop-blur-sm">
-                                                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                                                        <GripVertical size={16} className="text-gray-400 cursor-grab flex-shrink-0 hover:text-gray-300 transition-colors" />
-                                                        <h3 className="text-white font-semibold text-sm break-words line-clamp-2 flex-1">{graph.config.title}</h3>
-                                                        <span className={`text-xs px-2 py-1 rounded-md flex-shrink-0 font-medium ${effectiveStyle === 'dashboard' ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'}`}>
-                                                            {effectiveStyle === 'dashboard' ? '📊 Dashboard' : '📄 Research'}
-                                                        </span>
+                                                {/* ── Inner card: overflow:hidden for rounded corner clipping ── */}
+                                                <div className="glass-effect rounded-xl graph-card-inner">
+                                                    <div className="bg-gray-800/40 p-3 border-b border-white/10 flex items-center justify-between backdrop-blur-sm">
+                                                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                                                            <GripVertical size={16} className="text-gray-400 cursor-grab flex-shrink-0 hover:text-gray-300 transition-colors" />
+                                                            <h3 className="text-white font-semibold text-sm break-words line-clamp-2 flex-1">{graph.config.title}</h3>
+                                                            <span className={`text-xs px-2 py-1 rounded-md flex-shrink-0 font-medium ${effectiveStyle === 'dashboard' ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'}`}>
+                                                                {effectiveStyle === 'dashboard' ? '📊 Dashboard' : '📄 Research'}
+                                                            </span>
+                                                        </div>
+                                                        <div className="flex gap-1 ml-2">
+                                                            <button onClick={(e) => { e.stopPropagation(); setFullscreenGraph(graph); }}
+                                                                className="p-1.5 bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/30 hover:border-purple-500/50 text-purple-300 hover:text-purple-200 rounded-lg transition-all shadow-sm hover:shadow-lg transform hover:scale-110"
+                                                                title="Fullscreen"><Maximize2 size={14} /></button>
+                                                            <button onClick={(e) => { e.stopPropagation(); exportSVG(graph.id); }}
+                                                                className="p-1.5 bg-blue-600/20 hover:bg-blue-600/40 border border-blue-500/30 hover:border-blue-500/50 text-blue-300 hover:text-blue-200 rounded-lg transition-all shadow-sm hover:shadow-lg transform hover:scale-110"
+                                                                title="Export SVG"><Download size={14} /></button>
+                                                            <button onClick={(e) => { e.stopPropagation(); exportPNG(graph.id); }}
+                                                                className="p-1.5 bg-green-600/20 hover:bg-green-600/40 border border-green-500/30 hover:border-green-500/50 text-green-300 hover:text-green-200 rounded-lg transition-all shadow-sm hover:shadow-lg transform hover:scale-110"
+                                                                title="Export PNG (HD)"><Download size={14} /></button>
+                                                            <button onClick={(e) => { e.stopPropagation(); editGraph(graph); }}
+                                                                className="p-1.5 bg-gray-600/20 hover:bg-gray-600/30 border border-gray-500/30 text-gray-300 rounded-lg transition-all"
+                                                                ><Edit size={14} /></button>
+                                                            <button onClick={(e) => { e.stopPropagation(); deleteGraph(graph.id); }}
+                                                                className="p-1.5 bg-red-600/20 hover:bg-red-600/30 border border-red-500/30 text-red-300 rounded-lg transition-all"
+                                                                ><Trash size={14} /></button>
+                                                        </div>
                                                     </div>
-                                                    <div className="flex gap-1 ml-2">
-                                                        <button
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                setFullscreenGraph(graph);
-                                                            }}
-                                                            className="p-1.5 bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/30 hover:border-purple-500/50 text-purple-300 hover:text-purple-200 rounded-lg transition-all shadow-sm hover:shadow-lg transform hover:scale-110"
-                                                            title="Fullscreen"
-                                                        >
-                                                            <Maximize2 size={14} />
-                                                        </button>
-                                                        <button
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                exportSVG(graph.id);
-                                                            }}
-                                                            className="p-1.5 bg-blue-600/20 hover:bg-blue-600/40 border border-blue-500/30 hover:border-blue-500/50 text-blue-300 hover:text-blue-200 rounded-lg transition-all shadow-sm hover:shadow-lg transform hover:scale-110"
-                                                            title="Export SVG"
-                                                        >
-                                                            <Download size={14} />
-                                                        </button>
-                                                        <button
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                exportPNG(graph.id);
-                                                            }}
-                                                            className="p-1.5 bg-green-600/20 hover:bg-green-600/40 border border-green-500/30 hover:border-green-500/50 text-green-300 hover:text-green-200 rounded-lg transition-all shadow-sm hover:shadow-lg transform hover:scale-110"
-                                                            title="Export PNG (HD)"
-                                                        >
-                                                            <Download size={14} />
-                                                        </button>
-                                                        <button
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                editGraph(graph);
-                                                            }}
-                                                            className="p-1.5 bg-gray-600/20 hover:bg-gray-600/30 border border-gray-500/30 text-gray-300 rounded-lg transition-all"
-                                                        >
-                                                            <Edit size={14} />
-                                                        </button>
-                                                        <button
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                deleteGraph(graph.id);
-                                                            }}
-                                                            className="p-1.5 bg-red-600/20 hover:bg-red-600/30 border border-red-500/30 text-red-300 rounded-lg transition-all"
-                                                        >
-                                                            <Trash size={14} />
-                                                        </button>
+
+                                                    <div
+                                                        id={`graph-${graph.id}`}
+                                                        className={effectiveStyle === 'dashboard' ? '' : 'bg-white p-2'}
+                                                        onClick={() => setFullscreenGraph(graph)}
+                                                        style={{ userSelect: 'none' }}
+                                                    >
+                                                        <D3Graph
+                                                            key={`${graph.id}-${renderKey}`}
+                                                            config={effectiveConfig}
+                                                            data={graph.data}
+                                                            id={graph.id}
+                                                            theme={theme}
+                                                            cardHeight={ch}
+                                                            cardWidth={cw}
+                                                        />
                                                     </div>
                                                 </div>
-                                                <div
-                                                    id={`graph-${graph.id}`}
-                                                    className={effectiveStyle === 'dashboard' ? 'relative' : 'bg-white p-2 relative'}
-                                                    onClick={() => setFullscreenGraph(graph)}
-                                                    style={{ userSelect: 'none' }}
-                                                >
-                                                    <D3Graph key={`${graph.id}-${renderKey}`} config={effectiveConfig} data={graph.data} id={graph.id} theme={theme} cardHeight={graph.cardHeight || 400} />
-                                                    <div
-                                                        className="resize-handle"
-                                                        onMouseDown={(e) => {
-                                                            e.stopPropagation();
-                                                            handleResizeMouseDown(e, graph);
-                                                        }}
-                                                        onClick={(e) => e.stopPropagation()}
-                                                        title="Drag to resize"
-                                                    >
-                                                        <div className="resize-handle-bar" />
-                                                    </div>
+
+                                                {/* ── Resize handles (outside graph-card-inner, so they're not clipped) ── */}
+
+                                                {/* South: height only */}
+                                                <div className="resize-edge-s"
+                                                    onMouseDown={(e) => handleResizeMouseDown(e, graph, 's')}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    title="Drag to resize height">
+                                                    <div className="resize-pip-h" />
+                                                </div>
+
+                                                {/* East: width only */}
+                                                <div className="resize-edge-e"
+                                                    onMouseDown={(e) => handleResizeMouseDown(e, graph, 'e')}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    title="Drag to resize width">
+                                                    <div className="resize-pip-v" />
+                                                </div>
+
+                                                {/* South-East corner: both */}
+                                                <div className="resize-corner-se"
+                                                    onMouseDown={(e) => handleResizeMouseDown(e, graph, 'se')}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    title="Drag to resize freely">
+                                                    <div className="resize-pip-corner" />
                                                 </div>
                                             </div>
                                         )})}
@@ -2465,12 +2640,36 @@
                                             </div>
                                             <div className="grid grid-cols-2 gap-3">
                                                 <div>
-                                                    <label className="block text-gray-300 text-sm mb-1.5">X-axis Label</label>
-                                                    <input type="text" value={modalForm.xLabel} onChange={(e) => setModalForm({...modalForm, xLabel: e.target.value})} className="w-full px-3 py-2 bg-gray-800/50 text-white border border-gray-700 rounded-lg text-sm" placeholder="X-axis" />
+                                                    <label className="block text-gray-300 text-sm mb-1.5">Primary X Label <span className="text-gray-500 text-xs">(syncs to first X axis)</span></label>
+                                                    <input type="text" value={modalForm.xLabel}
+                                                        onChange={(e) => {
+                                                            const v = e.target.value;
+                                                            const firstXIdx = modalForm.axes.findIndex(a => a.type === 'x');
+                                                            setModalForm({
+                                                                ...modalForm,
+                                                                xLabel: v,
+                                                                axes: firstXIdx >= 0
+                                                                    ? modalForm.axes.map((a, i) => i === firstXIdx ? { ...a, label: v } : a)
+                                                                    : modalForm.axes
+                                                            });
+                                                        }}
+                                                        className="w-full px-3 py-2 bg-gray-800/50 text-white border border-gray-700 rounded-lg text-sm" placeholder="X-axis" />
                                                 </div>
                                                 <div>
-                                                    <label className="block text-gray-300 text-sm mb-1.5">Y-axis Label</label>
-                                                    <input type="text" value={modalForm.yLabel} onChange={(e) => setModalForm({...modalForm, yLabel: e.target.value})} className="w-full px-3 py-2 bg-gray-800/50 text-white border border-gray-700 rounded-lg text-sm" placeholder="Y-axis" />
+                                                    <label className="block text-gray-300 text-sm mb-1.5">Primary Y Label <span className="text-gray-500 text-xs">(syncs to first Y axis)</span></label>
+                                                    <input type="text" value={modalForm.yLabel}
+                                                        onChange={(e) => {
+                                                            const v = e.target.value;
+                                                            const firstYIdx = modalForm.axes.findIndex(a => a.type === 'y');
+                                                            setModalForm({
+                                                                ...modalForm,
+                                                                yLabel: v,
+                                                                axes: firstYIdx >= 0
+                                                                    ? modalForm.axes.map((a, i) => i === firstYIdx ? { ...a, label: v } : a)
+                                                                    : modalForm.axes
+                                                            });
+                                                        }}
+                                                        className="w-full px-3 py-2 bg-gray-800/50 text-white border border-gray-700 rounded-lg text-sm" placeholder="Y-axis" />
                                                 </div>
                                             </div>
                                         </div>
@@ -2580,6 +2779,86 @@
                                                     </label>
                                                 </div>
                                             )}
+                                        </div>
+
+                                        {/* ── Axes Manager ────────────────────────────────────── */}
+                                        <div className="p-4 bg-gray-800/20 rounded-xl border border-gray-700/50">
+                                            <div className="flex items-center justify-between mb-3">
+                                                <p className="text-gray-300 text-sm font-semibold">Axes Configuration</p>
+                                                <div className="flex gap-2">
+                                                    <button type="button" onClick={() => addAxis('x')}
+                                                        className="px-2 py-1 text-xs bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 text-blue-300 rounded-lg transition-all">
+                                                        + X Axis
+                                                    </button>
+                                                    <button type="button" onClick={() => addAxis('y')}
+                                                        className="px-2 py-1 text-xs bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-300 rounded-lg transition-all">
+                                                        + Y Axis
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                {modalForm.axes.map((axis) => {
+                                                    const sameType = modalForm.axes.filter(a => a.type === axis.type);
+                                                    const canDelete = sameType.length > 1;
+                                                    const posOptions = axis.type === 'y'
+                                                        ? [{ v: 'left', label: '← Left' }, { v: 'right', label: 'Right →' }]
+                                                        : [{ v: 'bottom', label: '↓ Bottom' }, { v: 'top', label: '↑ Top' }];
+                                                    const accentCls = axis.type === 'x' ? 'border-blue-500/40 bg-blue-500/10' : 'border-purple-500/40 bg-purple-500/10';
+
+                                                    return (
+                                                        <div key={axis.id} className={`flex items-center gap-2 p-2 rounded-lg border ${accentCls}`}>
+                                                            {/* Type badge */}
+                                                            <span className={`text-xs font-bold px-2 py-0.5 rounded ${axis.type === 'x' ? 'bg-blue-600/30 text-blue-300' : 'bg-purple-600/30 text-purple-300'}`}>
+                                                                {axis.type.toUpperCase()}
+                                                            </span>
+
+                                                            {/* Position toggle */}
+                                                            <div className="flex rounded-md overflow-hidden border border-gray-600">
+                                                                {posOptions.map(opt => (
+                                                                    <button key={opt.v} type="button"
+                                                                        onClick={() => updateAxis(axis.id, 'position', opt.v)}
+                                                                        className={`px-2 py-1 text-xs transition-all ${axis.position === opt.v ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>
+                                                                        {opt.label}
+                                                                    </button>
+                                                                ))}
+                                                            </div>
+
+                                                            {/* Label input */}
+                                                            <input
+                                                                type="text"
+                                                                value={axis.label}
+                                                                onChange={(e) => updateAxis(axis.id, 'label', e.target.value)}
+                                                                placeholder={axis.type === 'x' ? 'X label' : 'Y label'}
+                                                                className="flex-1 px-2 py-1 bg-gray-800/60 text-white border border-gray-700 rounded text-xs"
+                                                            />
+
+                                                            {/* Axis color */}
+                                                            <div className="relative flex items-center gap-1">
+                                                                <input
+                                                                    type="color"
+                                                                    value={axis.color || '#94a3b8'}
+                                                                    onChange={(e) => updateAxis(axis.id, 'color', e.target.value)}
+                                                                    className="w-6 h-6 rounded cursor-pointer border-0 bg-transparent"
+                                                                    title="Axis colour"
+                                                                />
+                                                                {axis.color && (
+                                                                    <button type="button" onClick={() => updateAxis(axis.id, 'color', null)}
+                                                                        className="text-xs text-gray-500 hover:text-gray-300" title="Reset to default">✕</button>
+                                                                )}
+                                                            </div>
+
+                                                            {/* Delete (only when at least one more of same type exists) */}
+                                                            {canDelete && (
+                                                                <button type="button" onClick={() => removeAxis(axis.id)}
+                                                                    className="p-1 text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded transition-all" title="Remove axis">
+                                                                    <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M1 1l10 10M11 1L1 11" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
                                         </div>
 
                                         <div>
@@ -2703,6 +2982,47 @@
                                                             </button>
                                                         </div>
                                                     </div>
+
+                                                    {/* Axis assignment — only shown when more than one axis of that type exists */}
+                                                    {(modalForm.axes.filter(a => a.type === 'x').length > 1 || modalForm.axes.filter(a => a.type === 'y').length > 1) && (
+                                                        <div className="mb-3 p-3 bg-gray-900/40 rounded-lg border border-indigo-500/30">
+                                                            <label className="text-xs text-indigo-300 block mb-2">Axis Assignment</label>
+                                                            <div className="grid grid-cols-2 gap-2">
+                                                                {modalForm.axes.filter(a => a.type === 'x').length > 1 && (
+                                                                    <div>
+                                                                        <label className="text-xs text-gray-400 block mb-1">X Axis</label>
+                                                                        <select
+                                                                            value={series.xAxisId || 'x1'}
+                                                                            onChange={(e) => updateSeries(series.id, 'xAxisId', e.target.value)}
+                                                                            className="w-full px-2 py-1 bg-gray-800/60 text-white border border-gray-700 rounded text-xs"
+                                                                        >
+                                                                            {modalForm.axes.filter(a => a.type === 'x').map(ax => (
+                                                                                <option key={ax.id} value={ax.id}>
+                                                                                    {ax.label || ax.id} ({ax.position})
+                                                                                </option>
+                                                                            ))}
+                                                                        </select>
+                                                                    </div>
+                                                                )}
+                                                                {modalForm.axes.filter(a => a.type === 'y').length > 1 && (
+                                                                    <div>
+                                                                        <label className="text-xs text-gray-400 block mb-1">Y Axis</label>
+                                                                        <select
+                                                                            value={series.yAxisId || 'y1'}
+                                                                            onChange={(e) => updateSeries(series.id, 'yAxisId', e.target.value)}
+                                                                            className="w-full px-2 py-1 bg-gray-800/60 text-white border border-gray-700 rounded text-xs"
+                                                                        >
+                                                                            {modalForm.axes.filter(a => a.type === 'y').map(ax => (
+                                                                                <option key={ax.id} value={ax.id}>
+                                                                                    {ax.label || ax.id} ({ax.position})
+                                                                                </option>
+                                                                            ))}
+                                                                        </select>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    )}
 
                                                     {/* Marker Shape */}
                                                     {modalForm.showMarkers !== false && (
