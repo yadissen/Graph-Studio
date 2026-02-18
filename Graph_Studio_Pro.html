@@ -2157,7 +2157,14 @@
                     graphStyle: 'research',
                     showGrid: false,
                     showTrendline: false,
-                    series: [{ id: Date.now(), name: 'Series 1', sheet: '', xColumn: '', yColumn: '', xErrorColumn: '', yErrorColumn: '', visible: true, showTrendline: true, trendlineName: 'Trendline 1', showTrendlineInLegend: true, excludedPoints: [] }]
+                    showR2: true,
+                    trendlineDashed: true,
+                    showMarkers: true,
+                    axes: [
+                        { id: 'x1', type: 'x', position: 'bottom', label: '', color: null },
+                        { id: 'y1', type: 'y', position: 'left',   label: '', color: null }
+                    ],
+                    series: [{ id: Date.now(), name: 'Series 1', sheet: '', xColumn: '', yColumn: '', xErrorColumn: '', yErrorColumn: '', customColor: '', visible: true, showTrendline: true, trendlineName: 'Trendline 1', showTrendlineInLegend: true, excludedPoints: [], markerShape: 'circle', plotType: 'line', xAxisId: 'x1', yAxisId: 'y1' }]
                 });
             };
 
@@ -2512,8 +2519,6 @@
                                         </div>
                                     </div>
                                 ) : (
-                                    {/* flex-wrap + items-start = each card is only as tall as its OWN content;
-                                        no grid row stretching, so shrinking works correctly */}
                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'flex-start' }}>
                                         {graphs.map((graph) => {
                                             const effectiveStyle = getEffectiveGraphStyle(graph);
