@@ -2291,24 +2291,64 @@
             const loadDashboard = (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
-                
+
                 const reader = new FileReader();
                 reader.onload = (event) => {
                     try {
                         const dashboardData = JSON.parse(event.target.result);
-                        setGraphs(dashboardData.graphs || []);
+                        if (!dashboardData || typeof dashboardData !== 'object') {
+                            alert('Invalid dashboard file format.');
+                            return;
+                        }
+                        const defaultAxes = [
+                            { id: 'x1', type: 'x', position: 'bottom', label: '', color: null },
+                            { id: 'y1', type: 'y', position: 'left',   label: '', color: null }
+                        ];
+                        // Migrate old-format graphs that predate multi-axis / marker fields
+                        const migratedGraphs = (dashboardData.graphs || []).map(g => ({
+                            ...g,
+                            config: {
+                                ...g.config,
+                                axes: (g.config.axes && g.config.axes.length > 0) ? g.config.axes : defaultAxes,
+                                showR2: g.config.showR2 !== undefined ? g.config.showR2 : true,
+                                trendlineDashed: g.config.trendlineDashed !== undefined ? g.config.trendlineDashed : true,
+                                showMarkers: g.config.showMarkers !== undefined ? g.config.showMarkers : true,
+                            },
+                            formData: g.formData ? {
+                                ...g.formData,
+                                axes: (g.formData.axes && g.formData.axes.length > 0) ? g.formData.axes : defaultAxes,
+                                showR2: g.formData.showR2 !== undefined ? g.formData.showR2 : true,
+                                trendlineDashed: g.formData.trendlineDashed !== undefined ? g.formData.trendlineDashed : true,
+                                showMarkers: g.formData.showMarkers !== undefined ? g.formData.showMarkers : true,
+                                series: (g.formData.series || []).map(s => ({
+                                    ...s,
+                                    customColor: s.customColor || '',
+                                    markerShape: s.markerShape || 'circle',
+                                    plotType: s.plotType || 'line',
+                                    xAxisId: s.xAxisId || 'x1',
+                                    yAxisId: s.yAxisId || 'y1',
+                                    excludedPoints: s.excludedPoints || [],
+                                }))
+                            } : undefined,
+                            data: (g.data || []).map(s => ({
+                                ...s,
+                                markerShape: s.markerShape || 'circle',
+                                plotType: s.plotType || 'line',
+                                xAxisId: s.xAxisId || 'x1',
+                                yAxisId: s.yAxisId || 'y1',
+                            }))
+                        }));
+                        setGraphs(migratedGraphs);
                         if (dashboardData.theme) {
                             setCurrentTheme(dashboardData.theme);
                         }
-                        // Force re-render
                         setTimeout(() => setRenderKey(prev => prev + 1), 100);
                         alert('Dashboard loaded successfully!');
                     } catch (error) {
-                        alert('Error loading dashboard file');
+                        alert('Error loading dashboard file: ' + (error.message || error));
                     }
                 };
                 reader.readAsText(file);
-                // Reset file input
                 e.target.value = '';
             };
 
@@ -2439,7 +2479,14 @@
                                                         graphStyle: 'research',
                                                         showGrid: false,
                                                         showTrendline: false,
-                                                        series: [{ id: Date.now(), name: 'Series 1', sheet: '', xColumn: '', yColumn: '', xErrorColumn: '', yErrorColumn: '', visible: true, showTrendline: true, trendlineName: 'Trendline 1', showTrendlineInLegend: true, excludedPoints: [] }]
+                                                        showR2: true,
+                                                        trendlineDashed: true,
+                                                        showMarkers: true,
+                                                        axes: [
+                                                            { id: 'x1', type: 'x', position: 'bottom', label: '', color: null },
+                                                            { id: 'y1', type: 'y', position: 'left',   label: '', color: null }
+                                                        ],
+                                                        series: [{ id: Date.now(), name: 'Series 1', sheet: '', xColumn: '', yColumn: '', xErrorColumn: '', yErrorColumn: '', customColor: '', visible: true, showTrendline: true, trendlineName: 'Trendline 1', showTrendlineInLegend: true, excludedPoints: [], markerShape: 'circle', plotType: 'line', xAxisId: 'x1', yAxisId: 'y1' }]
                                                     });
                                                     setIsModalOpen(true);
                                                 }}
