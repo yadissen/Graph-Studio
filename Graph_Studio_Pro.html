@@ -342,12 +342,12 @@
             z-index: 9999;
         }
 
-        /* Card Resize Handle */
-        .resize-handle {
+        /* Card Resize Handles */
+        .resize-handle-bottom {
             position: absolute;
             bottom: 0;
             left: 0;
-            right: 0;
+            right: 12px;
             height: 10px;
             cursor: ns-resize;
             display: flex;
@@ -358,11 +358,43 @@
             z-index: 10;
         }
 
-        .graph-card:hover .resize-handle {
+        .resize-handle-right {
+            position: absolute;
+            top: 0;
+            right: 0;
+            bottom: 12px;
+            width: 10px;
+            cursor: ew-resize;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            z-index: 10;
+        }
+
+        .resize-handle-corner {
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 18px;
+            height: 18px;
+            cursor: nwse-resize;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            z-index: 11;
+            display: flex;
+            align-items: flex-end;
+            justify-content: flex-end;
+        }
+
+        .graph-card:hover .resize-handle-bottom,
+        .graph-card:hover .resize-handle-right,
+        .graph-card:hover .resize-handle-corner {
             opacity: 1;
         }
 
-        .resize-handle-bar {
+        .resize-handle-bar-h {
             width: 40px;
             height: 4px;
             border-radius: 2px;
@@ -370,12 +402,33 @@
             pointer-events: none;
         }
 
+        .resize-handle-bar-v {
+            width: 4px;
+            height: 40px;
+            border-radius: 2px;
+            background: rgba(255, 255, 255, 0.4);
+            pointer-events: none;
+        }
+
+        .resize-handle-corner-dot {
+            width: 10px;
+            height: 10px;
+            border-right: 3px solid rgba(255, 255, 255, 0.5);
+            border-bottom: 3px solid rgba(255, 255, 255, 0.5);
+            border-radius: 0 0 3px 0;
+            pointer-events: none;
+            margin: 3px;
+        }
+
         .graph-card.is-resizing {
             transition: none !important;
             user-select: none;
+            transform: none !important;
         }
 
-        .graph-card.is-resizing .resize-handle {
+        .graph-card.is-resizing .resize-handle-bottom,
+        .graph-card.is-resizing .resize-handle-right,
+        .graph-card.is-resizing .resize-handle-corner {
             opacity: 1;
         }
 
@@ -816,19 +869,36 @@
                 // Filter to only visible series
                 const visibleData = data.filter(series => series.visible !== false);
                 
-                // Dynamic margins based on legend position and style
+                // Build axes configuration (supports unlimited X and Y axes)
+                const axesConfig = config.axes && config.axes.length > 0 ? config.axes : [
+                    { id: 'y1', type: 'y', position: 'left', label: config.yLabel || 'Y-axis', color: null },
+                    { id: 'x1', type: 'x', position: 'bottom', label: config.xLabel || 'X-axis', color: null }
+                ];
+                const yAxesConfig = axesConfig.filter(a => a.type === 'y');
+                const xAxesConfig = axesConfig.filter(a => a.type === 'x');
+                const leftYAxes = yAxesConfig.filter(a => a.position === 'left');
+                const rightYAxes = yAxesConfig.filter(a => a.position === 'right');
+                const bottomXAxes = xAxesConfig.filter(a => a.position === 'bottom');
+                const topXAxes = xAxesConfig.filter(a => a.position === 'top');
+
                 const hasMultipleSeries = visibleData.length > 1;
                 const legendPosition = config.legendPosition || 'auto';
                 const legendWidth = hasMultipleSeries ? 160 : 0;
-                
-                let margin = isDashboard 
+
+                // Dynamic margins: expand for additional axes
+                const yAxisSpacing = 70;
+                const xAxisSpacing = 50;
+                let margin = isDashboard
                     ? { top: 80, right: 60, bottom: 80, left: 90 }
                     : { top: 60, right: 40, bottom: 80, left: 90 };
-                
+                if (leftYAxes.length > 1) margin.left += (leftYAxes.length - 1) * yAxisSpacing;
+                if (rightYAxes.length > 0) margin.right = Math.max(margin.right, rightYAxes.length * yAxisSpacing + 20);
+                if (topXAxes.length > 0) margin.top = Math.max(margin.top, topXAxes.length * xAxisSpacing + (isDashboard ? 40 : 20));
+                if (bottomXAxes.length > 1) margin.bottom += (bottomXAxes.length - 1) * xAxisSpacing;
                 if (legendPosition === 'outside-right' && hasMultipleSeries) {
-                    margin.right = legendWidth + 30;
+                    margin.right = Math.max(margin.right, legendWidth + 30);
                 }
-                
+
                 const width = containerWidth - margin.left - margin.right;
                 const height = containerHeight - margin.top - margin.bottom;
 
@@ -856,62 +926,71 @@
                 const g = svg.append('g')
                     .attr('transform', `translate(${margin.left},${margin.top})`);
 
-                const allX = visibleData.flatMap(series => series.data.map(d => d.x)).filter(v => v != null && !isNaN(v));
-                const allY = visibleData.flatMap(series => series.data.map(d => d.y)).filter(v => v != null && !isNaN(v));
-                const allXErrors = visibleData.flatMap(series => series.data.filter(d => d.xError).map(d => d.xError)).filter(v => v != null && !isNaN(v));
-                const allYErrors = visibleData.flatMap(series => series.data.filter(d => d.yError).map(d => d.yError)).filter(v => v != null && !isNaN(v));
-
-                // Include trendline endpoints in range calculation
-                const trendlinePoints = [];
-                if (config.showTrendline) {
-                    visibleData.forEach(series => {
-                        if (series.showTrendline !== false && series.data.length >= 2) {
-                            const validData = series.data.filter(d => d.x != null && d.y != null && !isNaN(d.x) && !isNaN(d.y));
-                            if (validData.length >= 2) {
-                                const regression = calculateLinearRegression(validData);
-                                if (regression) {
-                                    const xMin = d3.min(validData, d => d.x);
-                                    const xMax = d3.max(validData, d => d.x);
-                                    trendlinePoints.push(
-                                        { x: xMin, y: regression.slope * xMin + regression.intercept },
-                                        { x: xMax, y: regression.slope * xMax + regression.intercept }
-                                    );
+                // Build per-axis scales
+                const buildAxisScale = (axisConf, isYAxis) => {
+                    const seriesForAxis = visibleData.filter(s =>
+                        isYAxis ? (s.yAxisId || 'y1') === axisConf.id : (s.xAxisId || 'x1') === axisConf.id
+                    );
+                    if (seriesForAxis.length === 0) {
+                        return isYAxis
+                            ? d3.scaleLinear().domain([0, 1]).range([height, 0]).nice()
+                            : d3.scaleLinear().domain([0, 1]).range([0, width]).nice();
+                    }
+                    const vals = seriesForAxis.flatMap(s => s.data.map(d => isYAxis ? d.y : d.x)).filter(v => v != null && !isNaN(v));
+                    const errVals = seriesForAxis.flatMap(s => s.data
+                        .filter(d => isYAxis ? d.yError : d.xError)
+                        .flatMap(d => isYAxis ? [d.y + d.yError, d.y - d.yError] : [d.x + d.xError, d.x - d.xError])
+                    ).filter(v => v != null && !isNaN(v));
+                    // Include trendline extent for Y axes
+                    const trendVals = [];
+                    if (isYAxis && config.showTrendline) {
+                        seriesForAxis.forEach(s => {
+                            if (s.showTrendline !== false) {
+                                const vd = s.data.filter(d => d.x != null && d.y != null && !isNaN(d.x) && !isNaN(d.y));
+                                if (vd.length >= 2) {
+                                    const reg = calculateLinearRegression(vd);
+                                    if (reg) {
+                                        const xMin = d3.min(vd, d => d.x), xMax = d3.max(vd, d => d.x);
+                                        trendVals.push(reg.slope * xMin + reg.intercept, reg.slope * xMax + reg.intercept);
+                                    }
                                 }
                             }
-                        }
-                    });
-                }
-                
-                const allXWithTrend = [...allX, ...trendlinePoints.map(p => p.x)];
-                const allYWithTrend = [...allY, ...trendlinePoints.map(p => p.y)];
+                        });
+                    }
+                    const allVals = [...vals, ...errVals, ...trendVals].filter(v => v != null && !isNaN(v));
+                    if (allVals.length === 0) {
+                        return isYAxis
+                            ? d3.scaleLinear().domain([0, 1]).range([height, 0]).nice()
+                            : d3.scaleLinear().domain([0, 1]).range([0, width]).nice();
+                    }
+                    return d3.scaleLinear()
+                        .domain([d3.min(allVals), d3.max(allVals)])
+                        .range(isYAxis ? [height, 0] : [0, width])
+                        .nice();
+                };
 
-                const xMin = d3.min(allXWithTrend) - (allXErrors.length > 0 ? d3.max(allXErrors) : 0);
-                const xMax = d3.max(allXWithTrend) + (allXErrors.length > 0 ? d3.max(allXErrors) : 0);
-                const yMin = d3.min(allYWithTrend) - (allYErrors.length > 0 ? d3.max(allYErrors) : 0);
-                const yMax = d3.max(allYWithTrend) + (allYErrors.length > 0 ? d3.max(allYErrors) : 0);
+                const yScales = {};
+                yAxesConfig.forEach(axisConf => { yScales[axisConf.id] = buildAxisScale(axisConf, true); });
 
-                const xScale = d3.scaleLinear()
-                    .domain([xMin, xMax])
-                    .range([0, width])
-                    .nice();
+                const xScales = {};
+                xAxesConfig.forEach(axisConf => { xScales[axisConf.id] = buildAxisScale(axisConf, false); });
 
-                const yScale = d3.scaleLinear()
-                    .domain([yMin, yMax])
-                    .range([height, 0])
-                    .nice();
+                // Primary scales for backward-compatible code (grid, reading mode, etc.)
+                const xScale = xScales['x1'] || Object.values(xScales)[0] || d3.scaleLinear().domain([0, 1]).range([0, width]);
+                const yScale = yScales['y1'] || Object.values(yScales)[0] || d3.scaleLinear().domain([0, 1]).range([height, 0]);
 
-                // Grid lines for dashboard
+                // Grid lines for dashboard (use primary axes)
                 if (isDashboard && config.showGrid !== false) {
                     const xGrid = d3.axisBottom(xScale).ticks(8).tickSize(-height).tickFormat('');
                     const yGrid = d3.axisLeft(yScale).ticks(8).tickSize(-width).tickFormat('');
-                    
+
                     g.append('g')
                         .attr('class', 'grid')
                         .attr('transform', `translate(0,${height})`)
                         .call(xGrid)
                         .selectAll('line')
                         .attr('class', 'grid-line');
-                        
+
                     g.append('g')
                         .attr('class', 'grid')
                         .call(yGrid)
@@ -919,40 +998,101 @@
                         .attr('class', 'grid-line');
                 }
 
-                const xAxis = d3.axisBottom(xScale).ticks(8);
-                const yAxis = d3.axisLeft(yScale).ticks(8);
-
-                g.append('g')
-                    .attr('class', 'x-axis')
-                    .attr('transform', `translate(0,${height})`)
-                    .call(xAxis)
-                    .selectAll('path, line')
-                    .attr('class', 'axis-line');
-
-                g.append('g')
-                    .attr('class', 'y-axis')
-                    .call(yAxis)
-                    .selectAll('path, line')
-                    .attr('class', 'axis-line');
-
-                // Axis labels
                 const labelColor = isDashboard ? '#94a3b8' : '#000000';
-                g.append('text')
-                    .attr('class', 'axis-label')
-                    .attr('text-anchor', 'middle')
-                    .attr('x', width / 2)
-                    .attr('y', height + 50)
-                    .attr('fill', labelColor)
-                    .text(config.xLabel || 'X-axis');
 
-                g.append('text')
-                    .attr('class', 'axis-label')
-                    .attr('text-anchor', 'middle')
-                    .attr('transform', 'rotate(-90)')
-                    .attr('x', -height / 2)
-                    .attr('y', -60)
-                    .attr('fill', labelColor)
-                    .text(config.yLabel || 'Y-axis');
+                // Render all Y axes
+                yAxesConfig.forEach((axisConf) => {
+                    const scale = yScales[axisConf.id];
+                    const axisColor = axisConf.color || labelColor;
+                    const label = axisConf.label || '';
+
+                    if (axisConf.position === 'left') {
+                        const leftIdx = leftYAxes.indexOf(axisConf);
+                        const offset = leftIdx * yAxisSpacing;
+
+                        const axisGroup = g.append('g')
+                            .attr('class', `y-axis y-axis-${axisConf.id}`)
+                            .attr('transform', `translate(${-offset}, 0)`)
+                            .call(d3.axisLeft(scale).ticks(8));
+                        axisGroup.selectAll('path, line').attr('class', 'axis-line');
+                        if (axisConf.color) axisGroup.selectAll('text').attr('fill', axisConf.color);
+
+                        g.append('text')
+                            .attr('class', 'axis-label')
+                            .attr('text-anchor', 'middle')
+                            .attr('transform', 'rotate(-90)')
+                            .attr('x', -height / 2)
+                            .attr('y', -(60 + offset))
+                            .attr('fill', axisColor)
+                            .text(label);
+                    } else {
+                        // right
+                        const rightIdx = rightYAxes.indexOf(axisConf);
+                        const axisX = width + rightIdx * yAxisSpacing;
+
+                        const axisGroup = g.append('g')
+                            .attr('class', `y-axis y-axis-${axisConf.id}`)
+                            .attr('transform', `translate(${axisX}, 0)`)
+                            .call(d3.axisRight(scale).ticks(8));
+                        axisGroup.selectAll('path, line').attr('class', 'axis-line');
+                        if (axisConf.color) axisGroup.selectAll('text').attr('fill', axisConf.color);
+
+                        g.append('text')
+                            .attr('class', 'axis-label')
+                            .attr('text-anchor', 'middle')
+                            .attr('transform', 'rotate(90)')
+                            .attr('x', height / 2)
+                            .attr('y', -(axisX + 50))
+                            .attr('fill', axisColor)
+                            .text(label);
+                    }
+                });
+
+                // Render all X axes
+                xAxesConfig.forEach((axisConf) => {
+                    const scale = xScales[axisConf.id];
+                    const axisColor = axisConf.color || labelColor;
+                    const label = axisConf.label || '';
+
+                    if (axisConf.position === 'bottom') {
+                        const bottomIdx = bottomXAxes.indexOf(axisConf);
+                        const offset = bottomIdx * xAxisSpacing;
+
+                        const axisGroup = g.append('g')
+                            .attr('class', `x-axis x-axis-${axisConf.id}`)
+                            .attr('transform', `translate(0,${height + offset})`)
+                            .call(d3.axisBottom(scale).ticks(8));
+                        axisGroup.selectAll('path, line').attr('class', 'axis-line');
+                        if (axisConf.color) axisGroup.selectAll('text').attr('fill', axisConf.color);
+
+                        g.append('text')
+                            .attr('class', 'axis-label')
+                            .attr('text-anchor', 'middle')
+                            .attr('x', width / 2)
+                            .attr('y', height + 50 + offset)
+                            .attr('fill', axisColor)
+                            .text(label);
+                    } else {
+                        // top
+                        const topIdx = topXAxes.indexOf(axisConf);
+                        const offset = topIdx * xAxisSpacing;
+
+                        const axisGroup = g.append('g')
+                            .attr('class', `x-axis x-axis-${axisConf.id}`)
+                            .attr('transform', `translate(0,${-offset})`)
+                            .call(d3.axisTop(scale).ticks(8));
+                        axisGroup.selectAll('path, line').attr('class', 'axis-line');
+                        if (axisConf.color) axisGroup.selectAll('text').attr('fill', axisConf.color);
+
+                        g.append('text')
+                            .attr('class', 'axis-label')
+                            .attr('text-anchor', 'middle')
+                            .attr('x', width / 2)
+                            .attr('y', -(30 + offset))
+                            .attr('fill', axisColor)
+                            .text(label);
+                    }
+                });
 
                 // Title with dashboard stats
                 if (isDashboard) {
@@ -994,57 +1134,61 @@
                     const paletteColor = COLOR_PALETTES[config.palette || 'midnight']?.colors[idx % (COLOR_PALETTES[config.palette || 'midnight']?.colors.length || 7)] || '#8b5cf6';
                     const color = series.customColor || paletteColor;
 
+                    // Per-series axis scales
+                    const sxScale = xScales[series.xAxisId || 'x1'] || xScale;
+                    const syScale = yScales[series.yAxisId || 'y1'] || yScale;
+
                     // Error bars
                     series.data.forEach(d => {
                         if (d.xError) {
                             g.append('line')
                                 .attr('class', 'error-bar')
-                                .attr('x1', xScale(d.x - d.xError))
-                                .attr('x2', xScale(d.x + d.xError))
-                                .attr('y1', yScale(d.y))
-                                .attr('y2', yScale(d.y))
+                                .attr('x1', sxScale(d.x - d.xError))
+                                .attr('x2', sxScale(d.x + d.xError))
+                                .attr('y1', syScale(d.y))
+                                .attr('y2', syScale(d.y))
                                 .attr('stroke', color);
 
                             g.append('line')
                                 .attr('class', 'error-cap')
-                                .attr('x1', xScale(d.x - d.xError))
-                                .attr('x2', xScale(d.x - d.xError))
-                                .attr('y1', yScale(d.y) - 4)
-                                .attr('y2', yScale(d.y) + 4)
+                                .attr('x1', sxScale(d.x - d.xError))
+                                .attr('x2', sxScale(d.x - d.xError))
+                                .attr('y1', syScale(d.y) - 4)
+                                .attr('y2', syScale(d.y) + 4)
                                 .attr('stroke', color);
 
                             g.append('line')
                                 .attr('class', 'error-cap')
-                                .attr('x1', xScale(d.x + d.xError))
-                                .attr('x2', xScale(d.x + d.xError))
-                                .attr('y1', yScale(d.y) - 4)
-                                .attr('y2', yScale(d.y) + 4)
+                                .attr('x1', sxScale(d.x + d.xError))
+                                .attr('x2', sxScale(d.x + d.xError))
+                                .attr('y1', syScale(d.y) - 4)
+                                .attr('y2', syScale(d.y) + 4)
                                 .attr('stroke', color);
                         }
 
                         if (d.yError) {
                             g.append('line')
                                 .attr('class', 'error-bar')
-                                .attr('x1', xScale(d.x))
-                                .attr('x2', xScale(d.x))
-                                .attr('y1', yScale(d.y - d.yError))
-                                .attr('y2', yScale(d.y + d.yError))
+                                .attr('x1', sxScale(d.x))
+                                .attr('x2', sxScale(d.x))
+                                .attr('y1', syScale(d.y - d.yError))
+                                .attr('y2', syScale(d.y + d.yError))
                                 .attr('stroke', color);
 
                             g.append('line')
                                 .attr('class', 'error-cap')
-                                .attr('x1', xScale(d.x) - 4)
-                                .attr('x2', xScale(d.x) + 4)
-                                .attr('y1', yScale(d.y - d.yError))
-                                .attr('y2', yScale(d.y - d.yError))
+                                .attr('x1', sxScale(d.x) - 4)
+                                .attr('x2', sxScale(d.x) + 4)
+                                .attr('y1', syScale(d.y - d.yError))
+                                .attr('y2', syScale(d.y - d.yError))
                                 .attr('stroke', color);
 
                             g.append('line')
                                 .attr('class', 'error-cap')
-                                .attr('x1', xScale(d.x) - 4)
-                                .attr('x2', xScale(d.x) + 4)
-                                .attr('y1', yScale(d.y + d.yError))
-                                .attr('y2', yScale(d.y + d.yError))
+                                .attr('x1', sxScale(d.x) - 4)
+                                .attr('x2', sxScale(d.x) + 4)
+                                .attr('y1', syScale(d.y + d.yError))
+                                .attr('y2', syScale(d.y + d.yError))
                                 .attr('stroke', color);
                         }
                     });
@@ -1052,15 +1196,15 @@
                     const validData = series.data
                         .filter(d => d.x != null && d.y != null && !isNaN(d.x) && !isNaN(d.y))
                         .sort((a, b) => a.x - b.x);
-                    
+
                     const isScatter = series.plotType === 'scatter';
 
                     // Add area fill for dashboard (drawn first, behind everything) - not for scatter
                     if (isDashboard && !isScatter) {
                         const area = d3.area()
-                            .x(d => xScale(d.x))
+                            .x(d => sxScale(d.x))
                             .y0(height)
-                            .y1(d => yScale(d.y))
+                            .y1(d => syScale(d.y))
                             .curve(d3.curveLinear);
 
                         g.append('path')
@@ -1074,8 +1218,8 @@
                     // Draw line (on top of area) - not for scatter mode
                     if (!isScatter) {
                         const line = d3.line()
-                            .x(d => xScale(d.x))
-                            .y(d => yScale(d.y))
+                            .x(d => sxScale(d.x))
+                            .y(d => syScale(d.y))
                             .defined(d => d.x != null && d.y != null && !isNaN(d.x) && !isNaN(d.y))
                             .curve(d3.curveLinear);
 
@@ -1101,7 +1245,6 @@
                     // Draw markers/points (on top of line) - respects showMarkers config
                     if (config.showMarkers !== false) {
                         const markerRadius = isDashboard ? (isFullscreen ? 7 : 6) : (isFullscreen ? 6 : 5);
-                        // D3 symbol size is area in square pixels; circle area = π r²
                         const symbolSize = Math.PI * markerRadius * markerRadius;
                         const markerShape = series.markerShape || 'circle';
 
@@ -1109,13 +1252,12 @@
                             .type(getD3Symbol(markerShape))
                             .size(symbolSize);
 
-                        // Wrap in <g> so CSS transform animation (scale) doesn't fight SVG transform (translate)
                         const pointGroups = g.selectAll(`.data-point-group-${idx}`)
                             .data(validData)
                             .enter()
                             .append('g')
                             .attr('class', `data-point-group-${idx}`)
-                            .attr('transform', d => `translate(${xScale(d.x)}, ${yScale(d.y)})`);
+                            .attr('transform', d => `translate(${sxScale(d.x)}, ${syScale(d.y)})`);
 
                         pointGroups.append('path')
                             .attr('class', `data-point data-point-${idx}`)
@@ -1129,18 +1271,22 @@
 
                 // Draw trendlines with positioned equation boxes
                 const trendlineAnnotations = [];
-                
+
                 visibleData.forEach((series, idx) => {
                     const paletteColor = COLOR_PALETTES[config.palette || 'midnight']?.colors[idx % (COLOR_PALETTES[config.palette || 'midnight']?.colors.length || 7)] || '#8b5cf6';
                     const color = series.customColor || paletteColor;
                     const validData = series.data.filter(d => d.x != null && d.y != null && !isNaN(d.x) && !isNaN(d.y));
-                    
+
+                    // Per-series scales for trendline
+                    const sxScale = xScales[series.xAxisId || 'x1'] || xScale;
+                    const syScale = yScales[series.yAxisId || 'y1'] || yScale;
+
                     if (config.showTrendline && series.showTrendline !== false && validData.length >= 2) {
                         const regression = calculateLinearRegression(validData);
                         if (regression) {
                             const xMin = d3.min(validData, d => d.x);
                             const xMax = d3.max(validData, d => d.x);
-                            
+
                             const trendData = [
                                 { x: xMin, y: regression.slope * xMin + regression.intercept },
                                 { x: xMax, y: regression.slope * xMax + regression.intercept }
@@ -1148,10 +1294,10 @@
 
                             // Draw trendline (dashed or solid based on config)
                             const trendLine = d3.line()
-                                .x(d => xScale(d.x))
-                                .y(d => yScale(d.y));
+                                .x(d => sxScale(d.x))
+                                .y(d => syScale(d.y));
 
-                            const isTrendlineDashed = config.trendlineDashed !== false; // default: dashed
+                            const isTrendlineDashed = config.trendlineDashed !== false;
                             g.append('path')
                                 .datum(trendData)
                                 .attr('d', trendLine)
@@ -1163,7 +1309,6 @@
 
                             // Only render annotation box when showR2 is enabled
                             if (config.showR2 !== false) {
-                                // Format equation and R²
                                 const slope = regression.slope.toExponential(2);
                                 const intercept = regression.intercept.toExponential(2);
                                 const rSquared = regression.rSquared.toFixed(4);
@@ -1171,24 +1316,20 @@
                                 const equation = `y = ${slope}x ${sign} ${intercept}`;
                                 const rSquaredText = `R² = ${rSquared}`;
 
-                                // Position at 40% along the trendline, offset perpendicular to avoid overlap
                                 const labelX = xMin + (xMax - xMin) * 0.4;
                                 const labelY = regression.slope * labelX + regression.intercept;
 
-                                // Offset perpendicular to the line based on series index to avoid overlap
                                 const lineAngle = Math.atan2(
-                                    yScale(trendData[0].y) - yScale(trendData[1].y),
-                                    xScale(trendData[1].x) - xScale(trendData[0].x)
+                                    syScale(trendData[0].y) - syScale(trendData[1].y),
+                                    sxScale(trendData[1].x) - sxScale(trendData[0].x)
                                 );
                                 const perpAngle = lineAngle + Math.PI / 2;
-                                const offsetDistance = 30 + (idx * 25); // Stagger offsets for multiple series
+                                const offsetDistance = 30 + (idx * 25);
 
-                                // Determine if we should offset up or down based on line slope
                                 const offsetDirection = regression.slope > 0 ? -1 : 1;
                                 const offsetX = Math.cos(perpAngle) * offsetDistance * offsetDirection;
                                 const offsetY = Math.sin(perpAngle) * offsetDistance * offsetDirection;
 
-                                // Check if there's a saved position for this series
                                 const savedPosition = series.equationPosition || null;
 
                                 trendlineAnnotations.push({
@@ -1200,7 +1341,9 @@
                                     offsetX,
                                     offsetY,
                                     seriesIdx: idx,
-                                    savedPosition
+                                    savedPosition,
+                                    sxScale,
+                                    syScale
                                 });
                             }
                         }
@@ -1209,16 +1352,18 @@
 
                 // Draw all equation boxes (draggable with position persistence)
                 trendlineAnnotations.forEach((annot, annotIdx) => {
+                    const annotXScale = annot.sxScale || xScale;
+                    const annotYScale = annot.syScale || yScale;
                     // Check for saved position and convert from data coordinates to pixels
                     let pixelX, pixelY;
                     if (annot.savedPosition && annot.savedPosition.dataX !== undefined) {
                         // Convert from data coordinates to pixel coordinates
-                        pixelX = xScale(annot.savedPosition.dataX) + margin.left;
-                        pixelY = yScale(annot.savedPosition.dataY) + margin.top;
+                        pixelX = annotXScale(annot.savedPosition.dataX) + margin.left;
+                        pixelY = annotYScale(annot.savedPosition.dataY) + margin.top;
                     } else {
                         // Use default position
-                        pixelX = xScale(annot.x) + annot.offsetX;
-                        pixelY = yScale(annot.y) + annot.offsetY;
+                        pixelX = annotXScale(annot.x) + annot.offsetX;
+                        pixelY = annotYScale(annot.y) + annot.offsetY;
                     }
                     
                     const annotation = g.append('g')
@@ -1294,11 +1439,11 @@
                                 const seriesIdx = parseInt(d3.select(this).attr('data-series-idx'));
                                 const pixelX = parseFloat(match[1]);
                                 const pixelY = parseFloat(match[2]);
-                                
-                                // Convert from pixel coordinates to data coordinates
-                                const dataX = xScale.invert(pixelX - margin.left);
-                                const dataY = yScale.invert(pixelY - margin.top);
-                                
+
+                                // Convert from pixel coordinates to data coordinates using per-series scale
+                                const dataX = annotXScale.invert(pixelX - margin.left);
+                                const dataY = annotYScale.invert(pixelY - margin.top);
+
                                 // Store in data coordinates (scale-independent)
                                 if (data[seriesIdx]) {
                                     data[seriesIdx].equationPosition = { dataX, dataY };
@@ -1748,24 +1893,41 @@
             const [renderKey, setRenderKey] = useState(0);
 
             // Card resize state (using ref to avoid re-render on each mousemove)
-            const resizeState = useRef({ isResizing: false, startY: 0, startHeight: 0, graphId: null });
+            const resizeState = useRef({
+                isResizing: false,
+                direction: null, // 'vertical', 'horizontal', 'both'
+                startX: 0,
+                startY: 0,
+                startWidth: 0,
+                startHeight: 0,
+                graphId: null
+            });
 
             useEffect(() => {
                 const handleMouseMove = (e) => {
                     if (!resizeState.current.isResizing) return;
-                    const deltaY = e.clientY - resizeState.current.startY;
-                    const newHeight = Math.max(220, Math.min(900, resizeState.current.startHeight + deltaY));
-                    setGraphs(prev => prev.map(g =>
-                        g.id === resizeState.current.graphId
-                            ? { ...g, cardHeight: newHeight }
-                            : g
-                    ));
+                    const { direction, startX, startY, startWidth, startHeight, graphId } = resizeState.current;
+                    const deltaX = e.clientX - startX;
+                    const deltaY = e.clientY - startY;
+
+                    setGraphs(prev => prev.map(g => {
+                        if (g.id !== graphId) return g;
+                        const updated = { ...g };
+                        if (direction === 'vertical' || direction === 'both') {
+                            updated.cardHeight = Math.max(220, Math.min(1200, startHeight + deltaY));
+                        }
+                        if (direction === 'horizontal' || direction === 'both') {
+                            updated.cardWidth = Math.max(300, Math.min(2400, startWidth + deltaX));
+                        }
+                        return updated;
+                    }));
                 };
                 const handleMouseUp = () => {
                     if (resizeState.current.isResizing) {
                         resizeState.current.isResizing = false;
                         document.body.style.cursor = '';
                         document.body.style.userSelect = '';
+                        document.querySelectorAll('.graph-card.is-resizing').forEach(el => el.classList.remove('is-resizing'));
                     }
                 };
                 document.addEventListener('mousemove', handleMouseMove);
@@ -1776,20 +1938,30 @@
                 };
             }, []);
 
-            const handleResizeMouseDown = (e, graph) => {
+            const handleResizeMouseDown = (e, graph, direction) => {
                 e.preventDefault();
                 e.stopPropagation();
+                const cardEl = e.currentTarget.closest('.graph-card');
+                if (cardEl) cardEl.classList.add('is-resizing');
                 resizeState.current = {
                     isResizing: true,
+                    direction,
+                    startX: e.clientX,
                     startY: e.clientY,
+                    startWidth: graph.cardWidth || cardEl?.offsetWidth || 400,
                     startHeight: graph.cardHeight || 400,
                     graphId: graph.id
                 };
-                document.body.style.cursor = 'ns-resize';
+                const cursorMap = { vertical: 'ns-resize', horizontal: 'ew-resize', both: 'nwse-resize' };
+                document.body.style.cursor = cursorMap[direction];
                 document.body.style.userSelect = 'none';
             };
             
             const theme = THEMES[currentTheme];
+            const defaultAxes = () => [
+                { id: 'y1', type: 'y', position: 'left', label: 'Y Axis', color: '' },
+                { id: 'x1', type: 'x', position: 'bottom', label: 'X Axis', color: '' }
+            ];
             const [modalForm, setModalForm] = useState({
                 title: '',
                 xLabel: '',
@@ -1802,7 +1974,8 @@
                 showR2: true,
                 trendlineDashed: true,
                 showMarkers: true,
-                series: [{ id: Date.now(), name: 'Series 1', sheet: '', xColumn: '', yColumn: '', xErrorColumn: '', yErrorColumn: '', customColor: '', visible: true, showTrendline: true, trendlineName: 'Trendline 1', showTrendlineInLegend: true, excludedPoints: [], markerShape: 'circle', plotType: 'line' }]
+                axes: defaultAxes(),
+                series: [{ id: Date.now(), name: 'Series 1', sheet: '', xColumn: '', yColumn: '', xErrorColumn: '', yErrorColumn: '', customColor: '', visible: true, showTrendline: true, trendlineName: 'Trendline 1', showTrendlineInLegend: true, excludedPoints: [], markerShape: 'circle', plotType: 'line', yAxisId: 'y1', xAxisId: 'x1' }]
             });
 
             // Auto-update graph palettes when theme changes
@@ -1872,6 +2045,8 @@
 
             const addSeries = () => {
                 const firstSeries = modalForm.series[0];
+                const yAxes = (modalForm.axes || []).filter(a => a.type === 'y');
+                const xAxes = (modalForm.axes || []).filter(a => a.type === 'x');
                 setModalForm({
                     ...modalForm,
                     series: [...modalForm.series, {
@@ -1889,8 +2064,51 @@
                         showTrendlineInLegend: true,
                         excludedPoints: [],
                         markerShape: 'circle',
-                        plotType: 'line'
+                        plotType: 'line',
+                        yAxisId: yAxes[0]?.id || 'y1',
+                        xAxisId: xAxes[0]?.id || 'x1'
                     }]
+                });
+            };
+
+            const addAxis = (type) => {
+                const existing = (modalForm.axes || []).filter(a => a.type === type);
+                const newId = `${type}${existing.length + 1}`;
+                const defaultPos = type === 'y'
+                    ? (existing.length % 2 === 0 ? 'left' : 'right')
+                    : (existing.length % 2 === 0 ? 'bottom' : 'top');
+                setModalForm({
+                    ...modalForm,
+                    axes: [...(modalForm.axes || []), {
+                        id: newId,
+                        type,
+                        position: defaultPos,
+                        label: `${type.toUpperCase()} Axis ${existing.length + 1}`,
+                        color: ''
+                    }]
+                });
+            };
+
+            const removeAxis = (axisId) => {
+                const newAxes = (modalForm.axes || []).filter(a => a.id !== axisId);
+                // Reassign series that used this axis to the first available axis of the same type
+                const removedAxis = (modalForm.axes || []).find(a => a.id === axisId);
+                const fallback = newAxes.find(a => a.type === removedAxis?.type);
+                setModalForm({
+                    ...modalForm,
+                    axes: newAxes,
+                    series: modalForm.series.map(s => ({
+                        ...s,
+                        yAxisId: s.yAxisId === axisId ? (fallback?.id || 'y1') : s.yAxisId,
+                        xAxisId: s.xAxisId === axisId ? (fallback?.id || 'x1') : s.xAxisId,
+                    }))
+                });
+            };
+
+            const updateAxis = (axisId, field, value) => {
+                setModalForm({
+                    ...modalForm,
+                    axes: (modalForm.axes || []).map(a => a.id === axisId ? { ...a, [field]: value } : a)
                 });
             };
 
@@ -1948,10 +2166,14 @@
                         showTrendlineInLegend: series.showTrendlineInLegend !== undefined ? series.showTrendlineInLegend : true,
                         excludedPoints: series.excludedPoints || [],
                         markerShape: series.markerShape || 'circle',
-                        plotType: series.plotType || 'line'
+                        plotType: series.plotType || 'line',
+                        yAxisId: series.yAxisId || 'y1',
+                        xAxisId: series.xAxisId || 'x1'
                     };
                 });
-                
+
+                const axesForConfig = modalForm.axes && modalForm.axes.length > 0 ? modalForm.axes : defaultAxes();
+
                 const graphObj = {
                     id: editingGraph ? editingGraph.id : Date.now(),
                     config: {
@@ -1965,7 +2187,8 @@
                         showTrendline: modalForm.showTrendline,
                         showR2: modalForm.showR2 !== undefined ? modalForm.showR2 : true,
                         trendlineDashed: modalForm.trendlineDashed !== undefined ? modalForm.trendlineDashed : true,
-                        showMarkers: modalForm.showMarkers !== undefined ? modalForm.showMarkers : true
+                        showMarkers: modalForm.showMarkers !== undefined ? modalForm.showMarkers : true,
+                        axes: axesForConfig
                     },
                     data: processedData,
                     formData: {
@@ -1980,6 +2203,7 @@
                         showR2: modalForm.showR2 !== undefined ? modalForm.showR2 : true,
                         trendlineDashed: modalForm.trendlineDashed !== undefined ? modalForm.trendlineDashed : true,
                         showMarkers: modalForm.showMarkers !== undefined ? modalForm.showMarkers : true,
+                        axes: axesForConfig,
                         series: modalForm.series
                     }
                 };
@@ -2001,7 +2225,8 @@
                     graphStyle: 'research',
                     showGrid: false,
                     showTrendline: false,
-                    series: [{ id: Date.now(), name: 'Series 1', sheet: '', xColumn: '', yColumn: '', xErrorColumn: '', yErrorColumn: '', visible: true, showTrendline: true, trendlineName: 'Trendline 1', showTrendlineInLegend: true, excludedPoints: [] }]
+                    axes: defaultAxes(),
+                    series: [{ id: Date.now(), name: 'Series 1', sheet: '', xColumn: '', yColumn: '', xErrorColumn: '', yErrorColumn: '', visible: true, showTrendline: true, trendlineName: 'Trendline 1', showTrendlineInLegend: true, excludedPoints: [], yAxisId: 'y1', xAxisId: 'x1' }]
                 });
             };
 
@@ -2025,11 +2250,14 @@
                         showR2: graph.formData.showR2 !== undefined ? graph.formData.showR2 : true,
                         trendlineDashed: graph.formData.trendlineDashed !== undefined ? graph.formData.trendlineDashed : true,
                         showMarkers: graph.formData.showMarkers !== undefined ? graph.formData.showMarkers : true,
+                        axes: graph.formData.axes && graph.formData.axes.length > 0 ? graph.formData.axes : defaultAxes(),
                         series: graph.formData.series.map(s => ({
                             ...s,
                             id: Date.now() + Math.random(),
                             markerShape: s.markerShape || 'circle',
-                            plotType: s.plotType || 'line'
+                            plotType: s.plotType || 'line',
+                            yAxisId: s.yAxisId || 'y1',
+                            xAxisId: s.xAxisId || 'x1'
                         }))
                     });
                 } else {
@@ -2045,6 +2273,7 @@
                         showR2: graph.config.showR2 !== undefined ? graph.config.showR2 : true,
                         trendlineDashed: graph.config.trendlineDashed !== undefined ? graph.config.trendlineDashed : true,
                         showMarkers: graph.config.showMarkers !== undefined ? graph.config.showMarkers : true,
+                        axes: graph.config.axes && graph.config.axes.length > 0 ? graph.config.axes : defaultAxes(),
                         series: graph.data.map((series, idx) => ({
                             id: Date.now() + idx,
                             name: series.name,
@@ -2057,7 +2286,9 @@
                             visible: series.visible !== undefined ? series.visible : true,
                             showTrendline: series.showTrendline !== undefined ? series.showTrendline : true,
                             markerShape: series.markerShape || 'circle',
-                            plotType: series.plotType || 'line'
+                            plotType: series.plotType || 'line',
+                            yAxisId: series.yAxisId || 'y1',
+                            xAxisId: series.xAxisId || 'x1'
                         }))
                     });
                 }
@@ -2345,21 +2576,30 @@
                                         </div>
                                     </div>
                                 ) : (
-                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                    <div className="flex flex-wrap gap-4 items-start">
                                         {graphs.map((graph) => {
                                             const effectiveStyle = getEffectiveGraphStyle(graph);
                                             const effectiveConfig = { ...graph.config, graphStyle: effectiveStyle };
-                                            
+                                            const cardW = graph.cardWidth;
+
                                             return (
-                                            <div 
-                                                key={graph.id} 
+                                            <div
+                                                key={graph.id}
+                                                data-graph-id={graph.id}
                                                 className="glass-effect rounded-xl overflow-hidden graph-card"
                                                 draggable="true"
                                                 onDragStart={(e) => handleDragStart(e, graph)}
                                                 onDragOver={handleDragOver}
                                                 onDrop={(e) => handleDrop(e, graph)}
                                                 onDragEnd={handleDragEnd}
-                                                style={{ cursor: draggedGraph?.id === graph.id ? 'grabbing' : 'grab' }}
+                                                style={{
+                                                    cursor: draggedGraph?.id === graph.id ? 'grabbing' : 'grab',
+                                                    width: cardW ? `${cardW}px` : 'calc(33.33% - 11px)',
+                                                    minWidth: '300px',
+                                                    flexShrink: 0,
+                                                    flexGrow: 0,
+                                                    boxSizing: 'border-box'
+                                                }}
                                             >
                                                 <div className="bg-gray-800/40 p-3 border-b border-white/10 flex items-center justify-between backdrop-blur-sm">
                                                     <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -2424,19 +2664,44 @@
                                                     id={`graph-${graph.id}`}
                                                     className={effectiveStyle === 'dashboard' ? 'relative' : 'bg-white p-2 relative'}
                                                     onClick={() => setFullscreenGraph(graph)}
-                                                    style={{ userSelect: 'none' }}
+                                                    style={{ userSelect: 'none', height: `${graph.cardHeight || 400}px`, overflow: 'hidden' }}
                                                 >
                                                     <D3Graph key={`${graph.id}-${renderKey}`} config={effectiveConfig} data={graph.data} id={graph.id} theme={theme} cardHeight={graph.cardHeight || 400} />
+                                                    {/* Bottom resize handle */}
                                                     <div
-                                                        className="resize-handle"
+                                                        className="resize-handle-bottom"
                                                         onMouseDown={(e) => {
                                                             e.stopPropagation();
-                                                            handleResizeMouseDown(e, graph);
+                                                            handleResizeMouseDown(e, graph, 'vertical');
                                                         }}
                                                         onClick={(e) => e.stopPropagation()}
-                                                        title="Drag to resize"
+                                                        title="Drag to resize height"
                                                     >
-                                                        <div className="resize-handle-bar" />
+                                                        <div className="resize-handle-bar-h" />
+                                                    </div>
+                                                    {/* Right resize handle */}
+                                                    <div
+                                                        className="resize-handle-right"
+                                                        onMouseDown={(e) => {
+                                                            e.stopPropagation();
+                                                            handleResizeMouseDown(e, graph, 'horizontal');
+                                                        }}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        title="Drag to resize width"
+                                                    >
+                                                        <div className="resize-handle-bar-v" />
+                                                    </div>
+                                                    {/* Corner resize handle */}
+                                                    <div
+                                                        className="resize-handle-corner"
+                                                        onMouseDown={(e) => {
+                                                            e.stopPropagation();
+                                                            handleResizeMouseDown(e, graph, 'both');
+                                                        }}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        title="Drag to resize both"
+                                                    >
+                                                        <div className="resize-handle-corner-dot" />
                                                     </div>
                                                 </div>
                                             </div>
@@ -2644,6 +2909,87 @@
                                             </div>
                                         </div>
 
+                                        {/* Axes Configuration */}
+                                        <div className="p-4 bg-gray-800/20 rounded-xl border border-gray-700/50">
+                                            <div className="flex justify-between items-center mb-3">
+                                                <div>
+                                                    <h3 className="font-semibold text-white">Plot Axes</h3>
+                                                    <p className="text-xs text-gray-400 mt-0.5">Configure multiple X and Y axes — assign each series below</p>
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => addAxis('y')}
+                                                        className="px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 border border-blue-500/40 text-blue-300 rounded-lg text-xs flex items-center gap-1"
+                                                    >
+                                                        <Plus size={12} /> Y Axis
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => addAxis('x')}
+                                                        className="px-3 py-1.5 bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/40 text-purple-300 rounded-lg text-xs flex items-center gap-1"
+                                                    >
+                                                        <Plus size={12} /> X Axis
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div className="space-y-2">
+                                                {(modalForm.axes || []).map((axis) => {
+                                                    const isY = axis.type === 'y';
+                                                    const positionOptions = isY
+                                                        ? [{ v: 'left', l: '← Left' }, { v: 'right', l: 'Right →' }]
+                                                        : [{ v: 'bottom', l: '↓ Bottom' }, { v: 'top', l: '↑ Top' }];
+                                                    const isRemovable = (modalForm.axes || []).filter(a => a.type === axis.type).length > 1;
+                                                    return (
+                                                        <div key={axis.id} className={`flex gap-2 items-center p-2.5 rounded-lg border ${isY ? 'bg-blue-900/10 border-blue-700/30' : 'bg-purple-900/10 border-purple-700/30'}`}>
+                                                            <span className={`text-xs font-bold px-2 py-0.5 rounded ${isY ? 'bg-blue-600/20 text-blue-300' : 'bg-purple-600/20 text-purple-300'}`}>
+                                                                {axis.id.toUpperCase()}
+                                                            </span>
+                                                            <input
+                                                                type="text"
+                                                                value={axis.label}
+                                                                onChange={(e) => updateAxis(axis.id, 'label', e.target.value)}
+                                                                placeholder="Axis label"
+                                                                className="flex-1 px-2 py-1 bg-gray-800/50 text-white border border-gray-700 rounded text-xs"
+                                                            />
+                                                            <select
+                                                                value={axis.position}
+                                                                onChange={(e) => updateAxis(axis.id, 'position', e.target.value)}
+                                                                className="px-2 py-1 bg-gray-800/50 text-white border border-gray-700 rounded text-xs"
+                                                            >
+                                                                {positionOptions.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+                                                            </select>
+                                                            <div className="flex items-center gap-1">
+                                                                <span className="text-xs text-gray-500">Color</span>
+                                                                <input
+                                                                    type="color"
+                                                                    value={axis.color || '#94a3b8'}
+                                                                    onChange={(e) => updateAxis(axis.id, 'color', e.target.value)}
+                                                                    className="w-7 h-7 rounded cursor-pointer border border-gray-600 bg-transparent"
+                                                                    title="Axis color"
+                                                                />
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => updateAxis(axis.id, 'color', '')}
+                                                                    className="text-xs text-gray-500 hover:text-gray-300 px-1"
+                                                                    title="Reset to default color"
+                                                                >Auto</button>
+                                                            </div>
+                                                            {isRemovable && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => removeAxis(axis.id)}
+                                                                    className="p-1 bg-red-600/20 hover:bg-red-600/40 text-red-300 rounded"
+                                                                >
+                                                                    <Trash size={12} />
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+
                                         <div>
                                             <div className="flex justify-between mb-3">
                                                 <h3 className="font-semibold text-white">Data Series</h3>
@@ -2703,6 +3049,39 @@
                                                             </button>
                                                         </div>
                                                     </div>
+
+                                                    {/* Axis Assignment */}
+                                                    {((modalForm.axes || []).filter(a => a.type === 'y').length > 1 || (modalForm.axes || []).filter(a => a.type === 'x').length > 1) && (
+                                                        <div className="mb-3 p-3 bg-gray-900/40 rounded-lg border border-cyan-500/20">
+                                                            <label className="text-xs text-cyan-300 block mb-2">Axis Assignment</label>
+                                                            <div className="grid grid-cols-2 gap-2">
+                                                                <div>
+                                                                    <label className="text-xs text-gray-400 block mb-1">Y Axis</label>
+                                                                    <select
+                                                                        value={series.yAxisId || 'y1'}
+                                                                        onChange={(e) => updateSeries(series.id, 'yAxisId', e.target.value)}
+                                                                        className="w-full px-2 py-1.5 bg-gray-800/50 text-white border border-gray-700 rounded-lg text-xs"
+                                                                    >
+                                                                        {(modalForm.axes || []).filter(a => a.type === 'y').map(a => (
+                                                                            <option key={a.id} value={a.id}>{a.id.toUpperCase()}: {a.label} ({a.position})</option>
+                                                                        ))}
+                                                                    </select>
+                                                                </div>
+                                                                <div>
+                                                                    <label className="text-xs text-gray-400 block mb-1">X Axis</label>
+                                                                    <select
+                                                                        value={series.xAxisId || 'x1'}
+                                                                        onChange={(e) => updateSeries(series.id, 'xAxisId', e.target.value)}
+                                                                        className="w-full px-2 py-1.5 bg-gray-800/50 text-white border border-gray-700 rounded-lg text-xs"
+                                                                    >
+                                                                        {(modalForm.axes || []).filter(a => a.type === 'x').map(a => (
+                                                                            <option key={a.id} value={a.id}>{a.id.toUpperCase()}: {a.label} ({a.position})</option>
+                                                                        ))}
+                                                                    </select>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )}
 
                                                     {/* Marker Shape */}
                                                     {modalForm.showMarkers !== false && (
